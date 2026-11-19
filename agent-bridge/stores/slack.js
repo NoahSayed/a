@@ -12,7 +12,7 @@
 // only the agents' bots and the people who should see the traffic. Hop caps and thread rules are
 // applied by every agent-bridge client (sender and receiver), not by a server.
 
-import { BridgeError, NetworkError, AGENT_NAME_RE, LIMITS, validateOutgoing } from "./common.js";
+import { BridgeError, NetworkError, AGENT_NAME_RE, LIMITS, assertSecureUrl, validateOutgoing } from "./common.js";
 
 const TIMEOUT_MS = 15000;
 const EVENT_TYPE = "agent_bridge_msg";
@@ -34,6 +34,7 @@ export class SlackStore {
   constructor({ apiUrl = "https://slack.com/api", token, channel, lookbackHours = 72, fetchImpl = globalThis.fetch }) {
     if (!token) throw new BridgeError("No agent token: set SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_FILE.");
     if (!channel) throw new BridgeError("SLACK_CHANNEL_ID is not set (the bridge channel's ID, like C0123ABCDEF).");
+    assertSecureUrl(apiUrl, "SLACK_API_URL");
     this.apiUrl = apiUrl.replace(/\/+$/, "");
     this.token = token;
     this.channel = channel;
@@ -78,7 +79,10 @@ export class SlackStore {
           await sleep(500 * 2 ** attempt);
           continue;
         }
-        throw new NetworkError(`Can't reach Slack (${this.apiUrl}): ${e.cause?.code || e.cause?.message || e.name || e.message}`);
+        throw new NetworkError(
+          `Can't reach Slack (${this.apiUrl}): ${e.cause?.code || e.cause?.message || e.name || e.message}`,
+          e.cause?.code || e.code || null
+        );
       }
       if (res.status === 429 || res.status >= 500) {
         const wait = Math.min(Number(res.headers.get("retry-after")) || 1, 10) * 1000;
@@ -315,7 +319,7 @@ export class SlackStore {
 
   async send({ to, body, type = "request", subject = null, threadId = null, maxHops = 20 }) {
     const me = await this.ensureMe();
-    validateOutgoing(
+    const checked = validateOutgoing(
       { from: me.name, to, body, type, subject, threadId },
       {
         isThreadId: isSlackTs,
@@ -327,6 +331,7 @@ export class SlackStore {
         },
       }
     );
+    ({ body, subject } = checked); // DLP may have redacted them
     const dir = await this.directory(true);
     let mention = "";
     if (HUMAN_RE.test(to)) {
@@ -385,6 +390,7 @@ export class SlackStore {
       max_hops: max,
       created_at: tsToIso(r.ts),
       read_at: null,
+      dlp: checked.dlp,
     };
   }
 

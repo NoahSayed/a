@@ -7,13 +7,20 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { createStore, isUuid, MESSAGE_TYPES, NetworkError } from "./store.js";
+import { backendFromEnv, createStore, isUuid, MESSAGE_TYPES, NetworkError } from "./store.js";
+import { dlpModeFromEnv, dlpNotice } from "./stores/dlp.js";
+import { proxyStatus, proxyWarning } from "./proxy.js";
 
 const MAX_HOPS = Number(process.env.AGENT_BRIDGE_MAX_HOPS || 20);
 const DESCRIPTION = process.env.AGENT_DESCRIPTION || null;
 
-let store, AGENT_NAME;
+let store, AGENT_NAME, DLP_MODE;
+const PROXY = proxyStatus();
 try {
+  DLP_MODE = dlpModeFromEnv(); // a typo in AGENT_BRIDGE_DLP must not silently disable the protection
+  // Only network backends need the proxy; a local SQLite mailbox makes no requests.
+  const warning = backendFromEnv() === "sqlite" ? null : proxyWarning(PROXY);
+  if (warning) console.error(`agent-bridge: WARNING: ${warning}`);
   store = await createStore();
   AGENT_NAME = await store.identify();
   const wanted = (process.env.AGENT_NAME || "").trim();
@@ -87,7 +94,8 @@ server.registerTool(
   { description: "Show this agent's name on the bridge, the backend, and the unread count.", inputSchema: {} },
   safe(async () => {
     const me = await store.whoami();
-    return text(JSON.stringify({ ...me, backend: store.describe(), max_hops: MAX_HOPS }, null, 2));
+    const proxy = { configured: PROXY.configured, active: PROXY.active };
+    return text(JSON.stringify({ ...me, backend: store.describe(), max_hops: MAX_HOPS, dlp: DLP_MODE, proxy }, null, 2));
   })
 );
 
@@ -126,7 +134,10 @@ server.registerTool(
       maxHops: MAX_HOPS,
     });
     const note = known ? "" : `\n(note: "${to}" hasn't connected yet; it will see this when it does)`;
-    return text(`Sent message #${m.id} to ${to} in thread ${m.thread_id} (hop ${m.hop}/${MAX_HOPS}).${note}`);
+    const dlp = dlpNotice(m.dlp);
+    return text(
+      `Sent message #${m.id} to ${to} in thread ${m.thread_id} (hop ${m.hop}/${MAX_HOPS}).${note}` + (dlp ? `\n${dlp}` : "")
+    );
   })
 );
 

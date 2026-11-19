@@ -1,3 +1,5 @@
+import { applyDlp, dlpModeFromEnv } from "./dlp.js";
+
 // Shared rules so both backends behave the same (the Supabase backend enforces the same
 // limits again in SQL; these checks just give faster, friendlier errors).
 
@@ -12,7 +14,14 @@ export const DEFAULT_ABUSE_LIMITS = { ratePerMinute: 60, maxUnreadPerSender: 200
 
 export class BridgeError extends Error {}
 // Transport trouble (unreachable, timeout, 5xx). Only these are worth retrying or waiting out.
-export class NetworkError extends BridgeError {}
+// `code` is the underlying network error code when there is one (ENOTFOUND, ECONNREFUSED,
+// SELF_SIGNED_CERT_IN_CHAIN, ...), which `cli.js doctor` uses to suggest a fix.
+export class NetworkError extends BridgeError {
+  constructor(message, code = null) {
+    super(message);
+    this.code = code;
+  }
+}
 
 export const isUuid = (s) =>
   typeof s === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
@@ -24,6 +33,30 @@ export const charLength = (s) => {
   return n;
 };
 
+// Tokens and keys travel in headers, so a backend URL must be https:// (R-HD). Loopback hosts
+// (what the tests and a local stand-in use) are exempt, and AGENT_BRIDGE_ALLOW_INSECURE_HTTP=1
+// is an explicit, loud escape hatch for labs. Checked in the store constructors so every entry
+// point (server, CLI, admin commands, doctor) gets it.
+export const isLoopbackHost = (h) => {
+  const host = String(h).replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
+};
+
+export function assertSecureUrl(url, what, { allowInsecure = process.env.AGENT_BRIDGE_ALLOW_INSECURE_HTTP === "1" } = {}) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new BridgeError(`${what} is not a valid URL.`);
+  }
+  if (u.protocol === "https:") return;
+  if (u.protocol === "http:" && (isLoopbackHost(u.hostname) || allowInsecure)) return;
+  throw new BridgeError(
+    `${what} must start with https:// (got ${u.protocol}//${u.host}): tokens and keys would travel unencrypted. ` +
+      `Use the https URL. Only for a lab, AGENT_BRIDGE_ALLOW_INSECURE_HTTP=1 allows plain http.`
+  );
+}
+
 export function validateAgentName(name, what = "agent name") {
   if (typeof name !== "string" || !AGENT_NAME_RE.test(name)) {
     throw new BridgeError(`Invalid ${what} ${JSON.stringify(name)}: use lowercase letters, digits, - and _ (max 40).`);
@@ -32,10 +65,15 @@ export function validateAgentName(name, what = "agent name") {
 
 // Backends may use their own thread ids (Slack: message timestamps) and their own
 // recipient names (Slack: "human:<user>"), and may have a lower body limit.
+//
+// Returns { body, subject, dlp }: the text to actually send (DLP may have redacted it) and what
+// the DLP scan found. Backends must send these values, not the ones they were given. In the
+// default "block" mode a message containing secrets or card numbers/IBANs is refused here.
 export function validateOutgoing({ from, to, body, type, subject, threadId }, {
   isThreadId = isUuid,
   validateRecipient = (t) => validateAgentName(t),
   maxBody = LIMITS.body,
+  dlpMode = dlpModeFromEnv(),
 } = {}) {
   if (!to || typeof to !== "string") throw new BridgeError("`to` is required.");
   validateRecipient(to);
@@ -49,4 +87,10 @@ export function validateOutgoing({ from, to, body, type, subject, threadId }, {
   }
   if (threadId != null && !isThreadId(threadId))
     throw new BridgeError(`Unknown thread_id ${threadId}. Omit it to start a new thread.`);
+  const checked = applyDlp({ body, subject }, dlpMode);
+  // Redaction can make a short match longer ("[REDACTED:payment-card]"): re-check the limit.
+  if (checked.body !== body && charLength(checked.body) > maxBody) {
+    throw new BridgeError(`body is too long after redaction (max ${maxBody} characters).`);
+  }
+  return checked;
 }

@@ -75,10 +75,13 @@ export function runCli(args, env, { input } = {}) {
 }
 
 // Strip bridge-related vars from the parent env so tests can't leak config into each other.
-function cleanEnv() {
+export function cleanEnv() {
   const env = { ...process.env };
   for (const k of Object.keys(env)) {
     if (/^(AGENT_|SUPABASE_)/.test(k)) delete env[k];
+    // The machine running the tests may sit behind a proxy (with NO_PROXY and a custom CA): tests
+    // that care about proxies set these explicitly, everything else must not depend on them.
+    if (/^(https?_proxy|all_proxy|no_proxy|NODE_USE_ENV_PROXY|NODE_USE_SYSTEM_CA|NODE_EXTRA_CA_CERTS|SLACK_)/i.test(k)) delete env[k];
   }
   return env;
 }

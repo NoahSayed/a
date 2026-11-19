@@ -2,7 +2,7 @@
 // Identity comes from the per-agent token; the database decides who the sender is.
 // See supabase/migration.sql for the functions called here.
 
-import { BridgeError, NetworkError, isUuid, validateAgentName, validateOutgoing } from "./common.js";
+import { BridgeError, NetworkError, assertSecureUrl, isUuid, validateAgentName, validateOutgoing } from "./common.js";
 
 const TIMEOUT_MS = 15000;
 
@@ -11,6 +11,7 @@ export class SupabaseStore {
     if (!url) throw new BridgeError("SUPABASE_URL is not set.");
     if (!key) throw new BridgeError("SUPABASE_PUBLISHABLE_KEY is not set.");
     if (!token) throw new BridgeError("No agent token: set AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE.");
+    assertSecureUrl(url, "SUPABASE_URL");
     this.url = url.replace(/\/+$/, "");
     this.key = key;
     this.token = token;
@@ -44,7 +45,10 @@ export class SupabaseStore {
           await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
           continue;
         }
-        throw new NetworkError(`Can't reach Supabase (${this.url}): ${e.cause?.code || e.cause?.message || e.name || e.message}`);
+        throw new NetworkError(
+          `Can't reach Supabase (${this.url}): ${e.cause?.code || e.cause?.message || e.name || e.message}`,
+          e.cause?.code || e.code || null
+        );
       }
       if (res.status >= 500 && attempt < retries) {
         await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
@@ -100,16 +104,17 @@ export class SupabaseStore {
 
   // Not retried: a retry after a lost response could deliver the message twice.
   async send({ to, body, type = "request", subject = null, threadId = null, maxHops = 20 }) {
-    validateOutgoing({ from: this.agent, to, body, type, subject, threadId });
-    return this.rpc("bridge_send", {
+    const checked = validateOutgoing({ from: this.agent, to, body, type, subject, threadId });
+    const sent = await this.rpc("bridge_send", {
       p_token: this.token,
       p_to: to,
-      p_body: body,
+      p_body: checked.body,
       p_type: type,
-      p_subject: subject,
+      p_subject: checked.subject,
       p_thread_id: threadId,
       p_max_hops: maxHops,
     });
+    return { ...sent, dlp: checked.dlp };
   }
 
   // Not retried when marking read, for the same reason as send.

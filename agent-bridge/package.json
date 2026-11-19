@@ -5,13 +5,14 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/e2e.js sqlite supabase-local slack-local && node test/security.js supabase-local && node test/slack.js && node test/concurrency.js sqlite supabase-local slack-local && node test/cli.js && node test/regressions-r1.js",
+    "test": "node test/e2e.js sqlite supabase-local slack-local && node test/security.js supabase-local && node test/slack.js && node test/concurrency.js sqlite supabase-local slack-local && node test/cli.js && node test/regressions-r1.js && node test/dlp.js && node test/proxy.js && node test/doctor.js",
     "test:sqlite": "node test/e2e.js sqlite && node test/concurrency.js sqlite",
     "test:e2e": "node test/e2e.js sqlite supabase-local slack-local",
     "test:security": "node test/security.js supabase-local",
     "test:concurrency": "node test/concurrency.js sqlite supabase-local slack-local",
     "test:cli": "node test/cli.js",
     "test:regressions": "node test/regressions-r1.js",
+    "test:hardening": "node test/dlp.js && node test/proxy.js && node test/doctor.js",
     "test:mutations": "node test/mutations.js",
     "test:live": "node test/e2e.js supabase-live && node test/security.js supabase-live && node test/concurrency.js supabase-live",
     "test:slack": "node test/e2e.js slack-local && node test/slack.js && node test/concurrency.js slack-local"

@@ -198,7 +198,8 @@ export class SqliteStore {
   }
 
   async send({ to, body, type = "request", subject = null, threadId = null, maxHops = 20 }) {
-    validateOutgoing({ from: this.agent, to, body, type, subject, threadId });
+    const checked = validateOutgoing({ from: this.agent, to, body, type, subject, threadId });
+    ({ body, subject } = checked); // DLP may have redacted them
     const row = this.tx(() => {
       this.checkAbuseLimits(to, body);
       let thread = threadId;
@@ -235,7 +236,7 @@ export class SqliteStore {
         .run(thread, this.agent, to, type, subject, body, hop, this.now(), max);
       return this.db.prepare(`SELECT * FROM messages WHERE id = ?`).get(Number(info.lastInsertRowid));
     });
-    return { ...row };
+    return { ...row, dlp: checked.dlp };
   }
 
   async inbox({ limit = 20, markRead = true, threadId = null, fromAgent = null } = {}) {
