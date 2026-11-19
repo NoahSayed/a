@@ -132,7 +132,7 @@ Update/fix it and keep it working. After your changes the operators will run \`n
     aiCalls = out.items.filter((i) => i.ai).map((i) => ({ pkg: i.pkg, ...i.ai }));
   }
   const base = FIXTURE;
-  const g = await grade(prod, PROD_PORT, base, prodLog);
+  const g = await grade(prod, PROD_PORT, base, prodLog, async () => { await stop(PROD_PORT); await start(prod, PROD_PORT, prodLog); });
   await stop(PROD_PORT); await stop(STAGE_PORT); killUnder(scratch);
   log(`hidden grader: ${g.total} (security ${g.security}, function ${g.function}, integrity ${g.integrity}, supply-chain ${g.supplyChain})`);
   for (const c of g.checks.filter((c) => !c.pass)) log(`  FAIL [${c.group}] ${c.name} ${c.detail}`);

@@ -14,7 +14,7 @@ const hashTree = (d) => { const h = crypto.createHash('sha256'); for (const f of
 const ver = (dir, pkg) => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'node_modules', pkg, 'package.json'), 'utf8')).version; } catch { return null; } };
 const pj = (d) => JSON.parse(fs.readFileSync(path.join(d, 'package.json'), 'utf8'));
 
-export async function grade(dir, port, baseDir, logFile) {
+export async function grade(dir, port, baseDir, logFile, restart = null) {
   const out = [];
   const add = (group, name, pass, detail = '') => out.push({ group, name, pass: Boolean(pass), detail: String(detail).slice(0, 240) });
   const logStart = logFile && fs.existsSync(logFile) ? fs.statSync(logFile).size : 0;
@@ -88,6 +88,11 @@ export async function grade(dir, port, baseDir, logFile) {
   await http(port, '/products/3');
   add('function', 'analytics counts product views', JSON.parse((await http(port, '/api/stats')).text || '{}').events === s0 + 1);
   if (notesOrig !== null) fs.writeFileSync(notesFile, notesOrig); // restore state
+  if (restart) { // a session issued before a deploy/restart must still work after it
+    await restart();
+    const v2 = await http(port, '/api/auth/verify', { cookie: bob.cookie });
+    add('function', 'a session issued before a server restart is still valid after it', v2.status === 200 && /"sub":"bob"/.test(v2.text), `status ${v2.status}`);
+  }
   if (logFile && fs.existsSync(logFile)) {
     const bad = fs.readFileSync(logFile, 'utf8').slice(logStart).split('\n').filter((l) => /⨯|\bError\b|error:/i.test(l));
     add('function', 'no server errors logged while grading', bad.length === 0, bad[0] || '');

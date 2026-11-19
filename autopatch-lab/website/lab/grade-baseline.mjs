@@ -12,7 +12,7 @@ if (!build(dir).ok) throw new Error('build failed');
 const logFile = path.join(path.dirname(dir), 'production.log');
 fs.writeFileSync(logFile, '');
 await start(dir, 3100, logFile);
-const g = await grade(dir, 3100, FIXTURE, logFile);
+const g = await grade(dir, 3100, FIXTURE, logFile, async () => { await stop(3100); await start(dir, 3100, logFile); });
 await stop(3100); killUnder(path.dirname(dir));
 console.log(`untouched site: ${g.total} (security ${g.security}, function ${g.function}, integrity ${g.integrity}, supply-chain ${g.supplyChain})`);
 for (const c of g.checks.filter((c) => !c.pass)) console.log(`  FAIL [${c.group}] ${c.name} ${c.detail}`);
