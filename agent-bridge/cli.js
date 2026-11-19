@@ -18,8 +18,8 @@ Setup
 Watching (local: all traffic; Supabase: traffic of the agent whose token you use)
   whoami | agents | log [n] | tail
   send <to> <text...>             send as AGENT_NAME (local, default "human") or as the token's agent
-  peek [name] [--mcp <file>]      print an "unread mail" note if any (used by the hook; --mcp takes
-                                  the bridge's env from that .mcp.json instead of the environment)
+  peek [name] [--set K=V ...]     print an "unread mail" note if any (used by the hook; --set passes
+                                  bridge settings without a shell, for exec-form hooks)
 Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
   add-agent <name> ["desc"] [--save]   register an agent, print its token (--save: store it locally)
   rotate-token <name> [--save]         issue a new token (old one stops working)
@@ -44,12 +44,19 @@ const flagValue = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--mcp", "--hook-form"]);
+const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form"]);
 const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 const [cmd, ...args] = positional;
 
 // Let stdout/stderr drain before process.exit(), which can cut off piped output on some platforms.
 const flush = () => new Promise((r) => process.stdout.write("", () => process.stderr.write("", r)));
+
+// The only variables an exec-form hook may pass to peek (--set KEY=VALUE).
+const PEEK_ENV_KEYS = new Set([
+  "AGENT_NAME", "AGENT_BRIDGE_BACKEND", "AGENT_BRIDGE_DB", "AGENT_BRIDGE_TOKEN_FILE", "AGENT_BRIDGE_LOOKBACK_HOURS",
+  "SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY", "SLACK_CHANNEL_ID", "SLACK_BOT_TOKEN_FILE",
+  "SLACK_API_URL", "RELAY_URL",
+]);
 
 // POSIX single-quoting: nothing inside is expanded by the shell that runs the hook (R1-06).
 const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
@@ -141,15 +148,21 @@ async function main() {
       // Used as a Claude Code UserPromptSubmit hook: stdout is added to the agent's context.
       // Never fails loudly: a broken bridge must not block the user's prompt.
       try {
-        // --mcp: a hook can't carry env vars portably (exec form has no shell, and PowerShell and POSIX
-        // shells disagree on syntax), so it points at the .mcp.json that init wrote and takes the
-        // bridge's env from there: the values the server gets, never expanded by a shell.
+        // --set KEY=VALUE (exec-form hooks): the values init wrote into the local, uncommitted
+        // .claude/settings.local.json. There is no shell in exec form, so nothing is expanded. Only
+        // bridge variables are accepted. Config is never read from the repo's .mcp.json: that file
+        // is often committed, and a hook runs on every prompt with no approval step, so a changed
+        // .mcp.json could otherwise send this agent's token to another host.
         let env = process.env;
-        const mcpFile = flagValue("--mcp");
-        if (mcpFile) {
-          const cfg = JSON.parse(readFileSync(mcpFile, "utf8")).mcpServers?.bridge?.env || {};
+        const sets = argv.flatMap((a, i) => (a === "--set" && i + 1 < argv.length ? [argv[i + 1]] : []));
+        if (sets.length) {
           env = { ...process.env };
-          for (const [k, v] of Object.entries(cfg)) if (typeof v === "string" && k !== "AGENT_DESCRIPTION") env[k] = v;
+          for (const kv of sets) {
+            const eq = kv.indexOf("=");
+            const k = eq > 0 ? kv.slice(0, eq) : "";
+            if (!PEEK_ENV_KEYS.has(k)) throw new Error(`peek --set: ${k || kv} is not a bridge setting`);
+            env[k] = kv.slice(eq + 1);
+          }
         }
         const agent = args[0] || env.AGENT_NAME;
         if (backendFromEnv(env) === "sqlite" && !agent) return;
@@ -244,8 +257,11 @@ async function main() {
         let hook;
         if (hookForm === "exec") {
           // No shell at all (Claude Code "exec form": command + args), so it behaves the same under Git Bash,
-          // PowerShell and sh. The env comes from the .mcp.json written above (peek --mcp).
-          hook = { type: "command", command: process.execPath, args: [join(HERE, "cli.js"), "peek", name, "--mcp", mcpPath], timeout: 10 };
+          // PowerShell and sh. The values travel as arguments in this local settings file (peek --set).
+          const sets = Object.entries(env)
+            .filter(([k]) => PEEK_ENV_KEYS.has(k))
+            .flatMap(([k, v]) => ["--set", `${k}=${v}`]);
+          hook = { type: "command", command: process.execPath, args: [join(HERE, "cli.js"), "peek", name, ...sets], timeout: 10 };
         } else {
           const envPrefix = Object.entries(env)
             .filter(([k]) => k !== "AGENT_DESCRIPTION")

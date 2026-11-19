@@ -135,18 +135,32 @@ try {
     assert.notEqual(expandHome("~foo"), resolve(homedir() + "foo"));
   });
 
-  await test("--hook-form exec writes command + args with no shell and no env in the settings file", async () => {
+  await test("--hook-form exec writes command + args with no shell; settings travel as --set args", async () => {
     const r = repo("hook-exec");
     const res = await runCli(["init", r, "alpha", "--hook", "--hook-form", "exec"], localEnv);
     assert.equal(res.code, 0, res.err);
     const hook = readJson(join(r, ".claude", "settings.local.json")).hooks.UserPromptSubmit.at(-1).hooks[0];
     assert.equal(hook.command, process.execPath);
     assert.ok(Array.isArray(hook.args));
-    assert.deepEqual(hook.args.slice(1), ["peek", "alpha", "--mcp", join(r, ".mcp.json")]);
-    assert.ok(!JSON.stringify(hook).includes(localEnv.AGENT_BRIDGE_DB), "env values were inlined into the hook");
+    assert.deepEqual(hook.args.slice(1, 3), ["peek", "alpha"]);
+    assert.ok(hook.args.includes(`AGENT_BRIDGE_DB=${localEnv.AGENT_BRIDGE_DB}`), "the mailbox path isn't in the hook's own args");
+    assert.ok(!hook.args.some((a) => /AGENT_DESCRIPTION/.test(a)));
     assert.equal((await runHook(r)).trim(), "");
     await runCli(["send", "alpha", "exec", "form"], { ...localEnv, AGENT_NAME: "human" });
-    assert.match(await runHook(r), /1 from human/, "the exec-form hook did not read the mailbox named in .mcp.json");
+    assert.match(await runHook(r), /1 from human/, "the exec-form hook did not read its mailbox");
+  });
+
+  await test("the exec-form hook ignores a changed .mcp.json (a committed file must not redirect it)", async () => {
+    const r = repo("hook-exec");
+    // someone edits the repo's .mcp.json to point the bridge elsewhere (here: another mailbox with mail in it)
+    const evilDb = join(tmp, "evil", "bridge.db");
+    await runCli(["send", "alpha", "from", "the", "evil", "mailbox"], { HOME, AGENT_BRIDGE_DB: evilDb, AGENT_NAME: "mallory" });
+    const cfg = readJson(join(r, ".mcp.json"));
+    cfg.mcpServers.bridge.env.AGENT_BRIDGE_DB = evilDb;
+    writeFileSync(join(r, ".mcp.json"), JSON.stringify(cfg));
+    const out = await runHook(r);
+    assert.doesNotMatch(out, /mallory/, "the hook followed the edited .mcp.json");
+    assert.match(out, /1 from human/);
   });
 
   await test("switching hook form replaces the old hook instead of stacking; bad forms are refused", async () => {
@@ -160,13 +174,16 @@ try {
     assert.match(bad.err, /hook-form/);
   });
 
-  await test("peek --mcp reads the bridge env from .mcp.json, and stays silent on a broken file", async () => {
-    const r = repo("hook-exec");
-    assert.match((await runCli(["peek", "alpha", "--mcp", join(r, ".mcp.json")], { HOME })).out, /1 from human/);
-    writeFileSync(join(r, "broken.json"), "{not json");
-    const broken = await runCli(["peek", "alpha", "--mcp", join(r, "broken.json")], { HOME });
-    assert.equal(broken.code, 0);
-    assert.equal(broken.out, "");
+  await test("peek --set accepts only bridge settings, and stays silent on a bad one", async () => {
+    const ok = await runCli(["peek", "alpha", "--set", `AGENT_BRIDGE_DB=${localEnv.AGENT_BRIDGE_DB}`], { HOME });
+    assert.match(ok.out, /1 from human/);
+    const bad = await runCli(
+      ["peek", "alpha", "--set", `AGENT_BRIDGE_DB=${localEnv.AGENT_BRIDGE_DB}`, "--set", "NODE_OPTIONS=--require /tmp/x.js"],
+      { HOME, AGENT_BRIDGE_DEBUG: "1" }
+    );
+    assert.equal(bad.code, 0);
+    assert.equal(bad.out, "");
+    assert.match(bad.err, /not a bridge setting/);
   });
 
   await test("save-token stores a token file (no Postgres involved)", async () => {

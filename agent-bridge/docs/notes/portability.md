@@ -82,3 +82,15 @@ would ignore `args` and run bare `node` on Windows. `--hook-form shell` is avail
 throws instead of silently skipping. The Linux job never sets it. `test/security.js` is Postgres-only and not run
 off-Linux. Postgres-free replacements for the token-file / `init --supabase` checks live in cli's
 "portability" section so macOS/Windows still cover them.
+
+
+## Orchestrator follow-up: `peek --mcp` replaced by `peek --set`
+
+The first version of the exec-form hook ran `peek <name> --mcp <repo>/.mcp.json`, reading the bridge settings from
+the repository's `.mcp.json` on every prompt. That file is often committed, and a hook runs with no approval step
+(unlike a project MCP server), so an edited `.mcp.json` could have pointed the hook at another host while keeping
+`AGENT_BRIDGE_TOKEN_FILE` on the user's token. The exec-form hook now carries its settings as
+`--set KEY=VALUE` arguments in the local, uncommitted `.claude/settings.local.json`. There is no shell, so nothing is
+expanded, and only bridge variables are accepted (`PEEK_ENV_KEYS` in `cli.js`). The test "the exec-form hook ignores a
+changed .mcp.json" fails on the `--mcp` version and passes now. Mutations: "exec-form hook carries no settings",
+"peek --set accepts any variable" and "exec-form hook reads the repo's .mcp.json" are all killed.

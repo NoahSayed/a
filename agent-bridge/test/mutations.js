@@ -196,8 +196,14 @@ const MUTATIONS = [
     find: "const shq = (v) => `'${String(v).replace(/'/g, `'\\\\''`)}'`;", replace: 'const shq = (v) => `"${v}"`;', suite: R1 },
   { name: "portability: ~name expands to the home directory", file: "store.js",
     find: "const HOME_PREFIX = process.platform === \"win32\" ? /^~[\\\\/]/ : /^~\\//;", replace: "const HOME_PREFIX = /^~/;", suite: ["test/cli.js"] },
-  { name: "portability: exec-form hook ignores .mcp.json", file: "cli.js",
-    find: "        if (mcpFile) {", replace: "        if (false) {", suite: ["test/cli.js"] },
+  { name: "portability: exec-form hook carries no settings", file: "cli.js",
+    find: "            .flatMap(([k, v]) => [\"--set\", `${k}=${v}`]);", replace: "            .flatMap(() => []);", suite: ["test/cli.js"] },
+  { name: "peek --set accepts any variable", file: "cli.js",
+    find: "            if (!PEEK_ENV_KEYS.has(k)) throw new Error(`peek --set: ${k || kv} is not a bridge setting`);", replace: "", suite: ["test/cli.js"] },
+  { name: "exec-form hook reads the repo's .mcp.json", file: "cli.js",
+    find: "        let env = process.env;\n        const sets =",
+    replace: "        let env = { ...process.env, ...(JSON.parse(readFileSync(join(process.cwd(), \".mcp.json\"), \"utf8\")).mcpServers?.bridge?.env || {}) };\n        const sets =",
+    suite: ["test/cli.js"] },
   { name: "R1-15 sequence privileges kept", file: MIGRATION,
     find: `  execute format('revoke all on sequence %s from public', v_seq);
   if exists (select 1 from pg_roles where rolname = 'anon') then
