@@ -1,2 +1,5 @@
 lab/node_modules
 results/cache
+# per-run folders are added with -f once a batch finishes
+results/*/
+results/all-runs.json

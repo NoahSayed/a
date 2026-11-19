@@ -1,4 +1,0 @@
-minimist@1.2.6: tests pass after bump
-lodash@4.18.0: tests pass after bump
-marked@4.0.10: tests FAIL after bump
-hidden grader: 8 pass / 1 fail marked ReDoS proof of concept no longer hangs
