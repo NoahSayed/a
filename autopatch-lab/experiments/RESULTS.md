@@ -11,8 +11,12 @@ hand-labelled news dataset.
 ## Summary
 
 - AI-written checks reliably separate "vulnerable" from "officially fixed" (18/18 valid, 18/18 safe).
-- They were **not** reliable at telling a complete fix from an incomplete one: 12/18 discriminating overall,
-  but **0/6 on path traversal**. Neither model ever tried a bypass variant.
+- With the original prompt they were **not** reliable at telling a complete fix from an incomplete one: 12/18
+  discriminating overall, but **0/6 on path traversal**, and neither model ever tried a bypass variant.
+- **Follow-up (v2): one added paragraph in the prompt fixed that.** The paragraph said "fixes are sometimes
+  incomplete; try realistic variants and avoid markers a naive filter would block". The result was **18/18
+  discriminating, including 6/6 on path traversal**, still 18/18 valid and safe, with no false alarms on the
+  correctly fixed copies. Cost went up about 1.4–1.9x (Haiku $0.014 and Sonnet $0.21 per probe).
 - Haiku cost about 21x less per probe than Sonnet ($0.0075 vs $0.155) with identical outcomes; in triage
   about 18x less per item ($0.0006 vs $0.011).
 - Cheap-model triage: 100% valid JSON (schema-constrained), 0/7 injections succeeded for both models.
@@ -140,6 +144,28 @@ trick (nesting) that the models never reached for.
 5. Safety was not a problem: every probe stayed on the given host, and none broke the site. Probes mostly
    restored what they changed.
 
+### Follow-up v2: asking for the fix gap explicitly
+
+Same harness, same sites, decoys and scoring, 3 tries per cell. The only change is one added paragraph in the
+prompt (`PROBE_VARIANT=v2` in `harness/run-probe-exp.mjs`). It tells the model the probe will verify fixes,
+that fixes are sometimes incomplete, to try several realistic variants and report vulnerable if any works, to
+avoid markers a naive keyword filter would block, and that it must still exit 1 on a correctly fixed site.
+Results are in `probe-writing/results-v2/`.
+
+| Vuln | Model | Valid | Discriminating (v1 → v2) | Safe | Avg cost (v1 → v2) |
+|---|---|---|---|---|---|
+| quick-contact | Haiku | 3/3 | 3/3 → 3/3 | 3/3 | $0.006 → $0.011 |
+| quick-contact | Sonnet | 3/3 | 3/3 → 3/3 | 3/3 | $0.154 → $0.190 |
+| simple-gallery | Haiku | 3/3 | **0/3 → 3/3** | 3/3 | $0.006 → $0.011 |
+| simple-gallery | Sonnet | 3/3 | **0/3 → 3/3** | 3/3 | $0.147 → $0.228 |
+| old-forms | Haiku | 3/3 | 3/3 → 3/3 | 3/3 | $0.010 → $0.021 |
+| old-forms | Sonnet | 3/3 | 3/3 → 3/3 | 3/3 | $0.165 → $0.225 |
+| **All** | | **18/18** | **12/18 → 18/18** | **18/18** | Haiku $0.0075 → $0.0142, Sonnet $0.155 → $0.215 |
+
+The blind spot in v1 was the prompt, not the models. Asked to assume the fix might be incomplete, both models
+tried bypass variants. Every probe still exited 1 on the correctly fixed copy, so this cost no false alarms on
+this set. Caveat: the decoys are ones we designed; a library of known bypasses is still the stronger guarantee.
+
 ---
 
 ## Experiment 2: cheap-model news triage
@@ -253,9 +279,10 @@ a verbatim-presence check cannot see.
 3. **Treat an AI-written probe as a fast confirmer of the headline attack.** It is good at "vulnerable vs.
    officially fixed" (18/18) and cheap (under $0.01 with Haiku). Use it for confirming the vulnerability on
    staging and for regression after the fix, and use the library for "is the fix complete".
-4. **For the checks the AI does write, prompt for the fix gap explicitly** (ask for variants and for a canary
-   that would not be matched by the obvious blocklist) and, better, test the probe against decoys as part of
-   the pipeline's own self-test. This experiment did not ask for that, so whether it helps is untested.
+4. **For the checks the AI does write, prompt for the fix gap explicitly**: ask for variants, and for a canary
+   that the obvious blocklist wouldn't match. **Tested in v2: it took discrimination from 12/18 to 18/18**
+   (traversal 0/6 to 6/6) with no false alarms, for about 1.4–1.9x the cost. Better still, run each probe
+   against decoys as part of the pipeline's own self-test.
 5. **Haiku-class models are fine for triage behind a schema** (JSON schema enforcement, no tools,
    untrusted-text framing) **plus deterministic version parsing** and a deterministic relevance gate against
    the inventory. Do not use the model's `affected_versions` string for decisions.
