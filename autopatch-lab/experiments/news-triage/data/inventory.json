@@ -1,0 +1,9 @@
+{
+  "_note": "The defined inventory an item is judged 'relevant' against. Mirrors the two autopatch-lab fixtures plus a couple of real-world frameworks, so Next.js/React-style real CVEs have something to be relevant or not relevant to.",
+  "npm_packages": ["lodash", "marked", "minimist", "next"],
+  "wordpress_plugins": ["quick-contact", "simple-gallery", "old-forms", "seo-helper"],
+  "wordpress_core": true,
+  "other": [],
+  "note_on_react": "react/react-dom are NOT in this inventory, so the react2shell typosquat item (i10) is correctly 'relevant: false' even though it is a real, scary-sounding supply-chain CVE: it never touches a real package we run.",
+  "note_on_vague_items": "An item naming no package (e.g. i15, i30) can still be judged on topic-relevance (is this about npm security generally? about WordPress plugins generally?) when the extractor is asked for ecosystem+relevant without a specific package match."
+}

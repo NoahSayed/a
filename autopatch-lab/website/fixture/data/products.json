@@ -1,0 +1,7 @@
+[
+  { "id": 1, "name": "Sourdough Loaf", "price": 6.5, "blurb": "Slow-fermented, crackly crust.", "featured": true },
+  { "id": 2, "name": "Butter Croissant", "price": 3.2, "blurb": "Laminated the old-fashioned way.", "featured": true },
+  { "id": 3, "name": "Cinnamon Roll", "price": 4.0, "blurb": "Sticky, warm, huge.", "featured": true },
+  { "id": 4, "name": "Rye Bread", "price": 5.9, "blurb": "Dense and tangy.", "featured": false },
+  { "id": 5, "name": "Lemon Tart", "price": 4.8, "blurb": "Sharp and sweet.", "featured": false }
+]

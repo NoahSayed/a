@@ -1,0 +1,20 @@
+[
+  {
+    "id": "baker",
+    "name": "Head Baker",
+    "role": "admin",
+    "pw": "dd72ffc0be64f98e:07d8c106568f25991b6193da7e3cc1eb1af6bcd969e128c5df9712d64d705205"
+  },
+  {
+    "id": "alice",
+    "name": "Alice",
+    "role": "customer",
+    "pw": "6b0067816d49c1d7:ceca3c8756ab10d8fea9aa40e9df7d7e99351a9013f120c73a2747231fd331b2"
+  },
+  {
+    "id": "bob",
+    "name": "Bob",
+    "role": "customer",
+    "pw": "03a20cae76b9931e:cebaf6e88298c87a23720c9a1e4f5e4fc3a6b88df54a559ef2f6a1bd34403057"
+  }
+]

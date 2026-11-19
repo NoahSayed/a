@@ -1,0 +1,11 @@
+Title: Old Forms <= 1.4.2 - Unauthenticated Arbitrary Options Update to Privilege Escalation
+CVE: CVE-2026-90003
+CVSS: 9.8 (Critical) CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H
+CWE: Missing Authorization
+Affected: old-forms <= 1.4.2
+Patched versions: none published
+
+Description:
+The Old Forms plugin is vulnerable to unauthorized arbitrary option updates due to a missing capability check and missing key restriction on the of_save_field AJAX action in all versions up to, and including, 1.4.2. This makes it possible for unauthenticated attackers to update arbitrary options on the WordPress site, which can be leveraged to enable user registration and set the default role to administrator. The plugin has been closed and is no longer maintained.
+
+References: https://example.invalid/advisories/old-forms

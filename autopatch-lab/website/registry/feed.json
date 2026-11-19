@@ -1,0 +1,11 @@
+{
+  "_note": "Advisories this pipeline run is asked to remediate (the 'ticket'). Other advisories npm audit reports for the same packages are reported as out of scope.",
+  "inScope": [
+    "GHSA-f82v-jwr5-mffw",
+    "GHSA-8cf7-32gw-wr33",
+    "GHSA-hjrf-2m68-5959",
+    "GHSA-qwph-4952-7xr6",
+    "FICTIONAL-BAKERY-2024-0001",
+    "FICTIONAL-BAKERY-2024-0002"
+  ]
+}

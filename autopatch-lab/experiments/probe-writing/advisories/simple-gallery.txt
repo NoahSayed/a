@@ -1,0 +1,11 @@
+Title: Simple Gallery <= 2.0.0 - Unauthenticated Path Traversal to Arbitrary File Read
+CVE: CVE-2026-90002
+CVSS: 7.5 (High) CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N
+CWE: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')
+Affected: simple-gallery <= 2.0.0
+Patched versions: 3.0.0
+
+Description:
+The Simple Gallery plugin is vulnerable to Path Traversal in all versions up to, and including, 2.0.0 via the sg_download parameter. This makes it possible for unauthenticated attackers to read the contents of arbitrary files on the server, which can contain sensitive information such as wp-config.php.
+
+References: https://example.invalid/advisories/simple-gallery

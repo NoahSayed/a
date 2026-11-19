@@ -1,0 +1,5 @@
+{
+  "_note": "Fictional internal package registry for the lab. Real packages (next, jsonwebtoken) come from the public npm registry.",
+  "@bakery/order-notes": { "status": "abandoned", "versions": { "2.1.0": "../fixture/vendor/bakery-order-notes-2.1.0.tgz" } },
+  "@bakery/analytics": { "status": "maintained", "versions": { "1.0.0": "../fixture/vendor/bakery-analytics-1.0.0.tgz", "1.0.1": "bakery-analytics-1.0.1.tgz" } }
+}

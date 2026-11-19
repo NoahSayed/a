@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.6.0",
+  "id": "FICTIONAL-BAKERY-2024-0002",
+  "summary": "[FICTIONAL LAB ADVISORY] @bakery/analytics 1.0.0 event names can pollute the counter object",
+  "details": "FICTIONAL advisory written for a lab exercise; it is not a real vulnerability record. @bakery/analytics before 1.0.1 stores event counts in a plain object, so an event named __proto__ can corrupt counters. Upgrade to 1.0.1.",
+  "severity": [{ "type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N" }],
+  "affected": [{ "package": { "name": "@bakery/analytics", "ecosystem": "npm" }, "ranges": [{ "type": "SEMVER", "events": [{ "introduced": "0" }, { "fixed": "1.0.1" }] }] }],
+  "database_specific": { "severity": "moderate", "fictional": true }
+}

@@ -1,0 +1,11 @@
+Title: SEO Helper <= 1.1.0 - Authenticated (Contributor+) Stored Cross-Site Scripting via seo_note Shortcode
+CVE: CVE-2026-90004
+CVSS: 6.4 (Medium) CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:L/I:L/A:N
+CWE: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')
+Affected: seo-helper <= 1.1.0
+Patched versions: 1.1.1
+
+Description:
+The SEO Helper plugin is vulnerable to Stored Cross-Site Scripting via the seo_note shortcode in versions up to, and including, 1.1.0 due to insufficient output escaping on user supplied attributes. This makes it possible for authenticated attackers, with contributor-level access and above, to inject arbitrary web scripts in pages.
+
+References: https://example.invalid/advisories/seo-helper

@@ -1,0 +1,4 @@
+results/*/
+results/all-runs.json
+.next/
+node_modules/

@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.6.0",
+  "id": "FICTIONAL-BAKERY-2024-0001",
+  "summary": "[FICTIONAL LAB ADVISORY] @bakery/order-notes lacks input validation: anonymous callers can overwrite another customer's order note",
+  "details": "FICTIONAL advisory written for a lab exercise; it is not a real vulnerability record. @bakery/order-notes 2.1.0 only checks note ownership when the caller supplies a userId. A request that reaches set() without a userId (for example an unauthenticated HTTP request) can overwrite any order's note. The package is abandoned; no fixed version exists. Mitigation: validate the caller and order ownership in application code before calling set().",
+  "severity": [{ "type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N" }],
+  "affected": [{ "package": { "name": "@bakery/order-notes", "ecosystem": "npm" }, "ranges": [{ "type": "SEMVER", "events": [{ "introduced": "0" }] }] }],
+  "database_specific": { "severity": "high", "fictional": true }
+}

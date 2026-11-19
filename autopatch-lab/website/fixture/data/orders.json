@@ -1,0 +1,6 @@
+[
+  { "id": 1, "userId": "alice", "items": ["Sourdough Loaf", "Butter Croissant"], "total": 9.7 },
+  { "id": 2, "userId": "bob", "items": ["Cinnamon Roll"], "total": 4.0 },
+  { "id": 3, "userId": "alice", "items": ["Lemon Tart"], "total": 4.8 },
+  { "id": 4, "userId": "bob", "items": ["Rye Bread", "Rye Bread"], "total": 11.8 }
+]
