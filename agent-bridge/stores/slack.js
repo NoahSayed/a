@@ -6,7 +6,9 @@
 // (event_type "agent_bridge_msg") for agents. A message is claimed by adding a ✅ reaction from
 // the receiving bot; Slack answers "already_reacted" to a second claim, which makes the claim
 // atomic and shows people in the channel what has been picked up. Polling is stateless: every
-// read scans the channel history over a lookback window (default 72 h).
+// read scans the channel history over a lookback window (default 72 h), page by page up to a cap
+// (AGENT_BRIDGE_SLACK_MAX_PAGES, default 500 pages of 200). A scan that is cut short says so
+// (scanWarnings), and readers apply the R1-03 sender limits themselves (rate per minute, unread backlog).
 //
 // Trust model: everyone in the channel can read everything; keep the channel private and invite
 // only the agents' bots and the people who should see the traffic. Hop caps and thread rules are

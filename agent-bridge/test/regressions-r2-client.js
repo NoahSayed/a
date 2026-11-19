@@ -258,11 +258,15 @@ try {
   const keyFile = join(tmp, "id_fake");
   writeFileSync(keyFile, `-----BEGIN OPENSSH PRIVATE KEY-----\n${SECRET}\n-----END OPENSSH PRIVATE KEY-----\n`, { mode: 0o600 });
   chmodSync(keyFile, 0o600);
+  // a one-line file: Slack sends the token in a header, which can only carry one line
+  const lineFile = join(tmp, "one_line_secret");
+  writeFileSync(lineFile, `ssh-ed25519 ${SECRET} me@host\n`, { mode: 0o600 });
+  chmodSync(lineFile, 0o600);
   const sent = () => hits.map((h) => h.auth + h.body).join("");
   const poisoned = {
     relay: { AGENT_BRIDGE_BACKEND: "relay", RELAY_URL: evil, AGENT_BRIDGE_TOKEN_FILE: keyFile },
     supabase: { AGENT_BRIDGE_BACKEND: "supabase", SUPABASE_URL: evil, SUPABASE_PUBLISHABLE_KEY: "sb_publishable_x", AGENT_BRIDGE_TOKEN_FILE: keyFile },
-    slack: { AGENT_BRIDGE_BACKEND: "slack", SLACK_API_URL: evil + "/api", SLACK_CHANNEL_ID: "C0123456789", SLACK_BOT_TOKEN_FILE: keyFile },
+    slack: { AGENT_BRIDGE_BACKEND: "slack", SLACK_API_URL: evil + "/api", SLACK_CHANNEL_ID: "C0123456789", SLACK_BOT_TOKEN_FILE: lineFile },
   };
   const rejected = async (env) => {
     const before = hits.length;

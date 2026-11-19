@@ -22,7 +22,9 @@ Watching (local: all traffic; Supabase: traffic of the agent whose token you use
   whoami | agents | log [n] | tail
   send <to> <text...>             send as AGENT_NAME (local, default "human") or as the token's agent
   peek [name] [--set K=V ...]     print an "unread mail" note if any (used by the hook; --set passes
-                                  bridge settings without a shell, for exec-form hooks)
+                                  bridge settings without a shell, for exec-form hooks; proxy and CA
+                                  settings (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, ...) make peek re-run itself once
+                                  so Node starts with them)
 Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
   add-agent <name> ["desc"] [--save]   register an agent, print its token (--save: store it locally)
   rotate-token <name> [--save]         issue a new token (old one stops working)
