@@ -95,3 +95,88 @@ Repro: `node /tmp/claude-0/-home-user-a/f9407917-d4b1-5c0a-a481-0ad006f6aa8a/scr
 Why it matters: it widens the blast radius of a poisoned `.mcp.json` from "the bridge token" to "any file readable by the user", and the same hole exists in the exec/shell hook for values from `settings.local.json`.
 Fix: check the secret's shape before use (`^abt_[0-9a-f]{64}$` for Supabase/relay, `^xoxb-[A-Za-z0-9-]+$` for Slack, the same patterns `save-token` and `save-slack-token` already enforce), refuse non-loopback `http://` URLs for agent calls, and optionally require token files to live under `~/.agent-bridge/`.
 
+### R2-12 (low, CONFIRMED) Exec-form hook drops `NODE_EXTRA_CA_CERTS`, so for a relay with a private CA (the documented setup) the unread-mail hook fails silently
+`init --relay` copies `NODE_EXTRA_CA_CERTS` into `.mcp.json`, and the shell-form hook carries it as an env prefix, but the exec-form hook only passes `PEEK_ENV_KEYS` via `--set`, and `NODE_EXTRA_CA_CERTS` is not in the set (it could not work anyway: Node reads it at process start, not from `process.env` later). `peek` swallows every error, so on Windows (exec is the default there) the hook just never reports unread mail and nothing says why. Not a confidentiality bug, but the same silent-degradation class as R2-01/R2-03, and the test suite only checks the shell form for the CA.
+Repro: `NODE_EXTRA_CA_CERTS=/etc/ssl/my-ca.pem RELAY_URL=https://bridge.internal:8787 node cli.js init <repo> fe --relay --hook --hook-form shell|exec` (token file present): the `shell` settings contain `NODE_EXTRA_CA_CERTS='/etc/ssl/my-ca.pem'`; the `exec` settings do not mention it, only `.mcp.json` does.
+Fix: for exec form, make `peek` re-spawn itself with `NODE_EXTRA_CA_CERTS` set from `--set`, or have init warn that exec hooks need `RELAY_TLS_CA` instead (which `tlsFetch` does honour and `PEEK_ENV_KEYS` allows).
+
+### R2-13 (low, CONFIRMED) An unauthenticated request with a deeply nested argument value gets HTTP 500 `internal error` (stack overflow in the error formatter)
+`typeError()` calls `JSON.stringify(v)` on the offending value to build the message; for a 120,000-level nested array `JSON.stringify` throws `RangeError`, which is not an `RpcError`, so the client gets a 500 and the relay logs an internal error, before any authentication. The relay does not crash, but this contradicts "unknown or bad arguments are 4xx", and gives anyone a way to fill the stderr log with "internal error" lines and to distinguish bodies by status. Same family as R2-02.
+Repro: `node /tmp/claude-0/-home-user-a/f9407917-d4b1-5c0a-a481-0ad006f6aa8a/scratchpad/adversary2/n1.mjs`:
+```
+500 {"code":"XX000","message":"internal error",...}      (stderr: relay: internal error in bridge_whoami: Maximum call stack size exceeded)
+shallow: 400 {"code":"22P02","message":"invalid input syntax for type text: [1]",...}
+```
+Fix: build the message from `typeof v` / `Array.isArray(v)` (no stringify of attacker data), or wrap in try/catch; reject nesting deeper than a few levels after `JSON.parse`.
+
+### R2-14 (low, CONFIRMED) The audit log does not record `bridge_recent`, and `peek` records only a count, so message bodies can be read without an audit trail
+The relay's audit promises a record of what was delivered (`deliver` per message, `thread`, `peek`). `bridge_recent` returns full bodies of every message the caller sent or received, read or not, and writes nothing. A `bridge_inbox` with `p_mark_read:false` (what `wait_for_message` does first, and what a hook-less client can loop on) is logged as `peek` with a count and no message ids, so the log cannot say which messages were disclosed.
+Repro: `node /tmp/claude-0/-home-user-a/f9407917-d4b1-5c0a-a481-0ad006f6aa8a/scratchpad/adversary2/au.mjs`:
+```
+bridge_recent returned 1 message body: secret-1 | peek returned 1
+audit entries added by those two reads: [ { action: 'peek', agent: 'bb', count: 1, id: undefined } ]
+```
+Why it matters: a token holder can re-read the whole history (up to 200 messages per call, repeatedly) through `bridge_recent` invisibly, which defeats the point of an audit log in the regulated deployments this relay targets.
+Fix: audit `recent` (agent, count, first/last id) and put the ids in `peek` entries.
+
+### R2-15 (medium, CONFIRMED) Slowloris: connections that stop sending in the middle of the request headers (or never send anything) are never closed, and there is no connection cap
+`headersTimeout = 15 s` / `requestTimeout = 30 s` do not reap a socket that sent a partial header block and then went quiet, nor one that connected and sent nothing; `server.timeout` is left at Node's default 0 and `maxConnections` is unset. Measured on Node 22.23.5: a body that stalls after the headers is closed at 30 s (408), but a half-sent header block, an idle connection and a single byte were all still open at 130 s (only a client that keeps dripping header bytes was cut, at 40 s). Any client with network reach (the port is open by design for the whole agent fleet) can therefore hold every file descriptor of the relay for as long as it likes, without sending a valid request or a credential, and the relay then fails all requests (including the compose/Docker health probe).
+Repro: `bash /tmp/claude-0/-home-user-a/f9407917-d4b1-5c0a-a481-0ad006f6aa8a/scratchpad/adversary2/d2.sh` (relay under `ulimit -n 256`, 300 connections each sending `POST ... HTTP/1.1\r\nHost: x\r\n` and nothing more):
+```
+partial-header connections held open: 235
+healthz while held: FAILED UND_ERR_SOCKET
+healthz after release: 200
+```
+(`m3.mjs` shows the 130 s / 75 s hold times; `r2.mjs` opened 3,000 idle connections without trouble because this sandbox allows 20,000 fds. Real hosts often default to 1,024.)
+Why it matters: a one-machine, no-credential outage of the message bus, which the docs treat as only "a 32 character key is the defence".
+Fix: `server.maxConnections`, a socket idle timeout (`server.setTimeout(30_000)` or `socket.setTimeout` in a `connection` handler that destroys the socket), and `server.connectionsCheckingInterval` lowered; say in relay/README.md to put the relay behind a proxy that does this.
+
+## Tried and held
+
+Relay
+- Key confusion matrix (`m1.mjs`): agent token or auditor key on admin functions -> 401; admin key or agent token on `bridge_admin_export` -> 401; admin/auditor key as `p_token` -> 403; duplicated `apikey` header -> 401; auditor key works only for export.
+- Argument fuzz (`f1.mjs`): 1,258 calls (35 hostile values x every argument of all 15 functions: huge/negative/float/NUL/lone surrogate/`__proto__`/arrays/objects/uuids/intervals/timestamps). The only 5xx were the two interval/nesting cases in R2-02 and R2-13; no crash, no stack or SQL text on the wire.
+- Legal hold and retention with the exact value `1`: `purge` and `delete-agent` refuse, including `delete-agent` for an agent with only old messages when a hold is on. No other code path deletes or rewrites message rows (inbox/unmark only change `read_at`, as intended; revoke/rotate touch only `relay_agents`).
+- Body limit (413 with early `Content-Length` and with chunked bodies), non-object JSON, 120,000-deep nested array body (400), unknown/extra arguments (404 PGRST202), `/healthz` content, 3,000 concurrent idle sockets (healthz still 2 ms; see R2-15 for the real limit), slow body (408 at 30 s).
+- SQLite file, `-wal`, `-shm` and the audit log are 0600 even in a 0755 directory; a pre-existing 0644 database is tightened. Admin key comparison is constant time on digests; no length oracle.
+- mTLS with a CA set: a client without a certificate fails the handshake (TLSv1.3 `certificate required`); server `minVersion` TLS 1.2; client `tlsFetch` verifies hostname and never follows redirects (the store refuses any 3xx).
+- Audit chain: edit, delete, reorder of any non-final line is caught at the first affected line. An attacker with write access to the file who recomputes the whole chain gets `OK` with a different final hash (`fg.mjs`), as the docs say: it is only detectable against an externally recorded last hash, and deleting the file entirely verifies as "OK (0 lines)" and the relay then starts a new chain from the genesis value.
+- `p_older_than` parsing: negative, exponent and multi-unit strings are rejected; retention comparison uses the same millisecond value as the cutoff.
+- Export: `p_after_id`/`p_limit` clamps hold, `p_to` is exclusive, `p_from` inclusive, the auditor cannot reach agent calls (zone problem is R2-09).
+
+Hooks
+- Shell form with hostile values (`RELAY_URL` containing `'$(...)'`, backticks and `;`, `NODE_EXTRA_CA_CERTS` with spaces and `$(...)`): the hook ran and the marker file was not created. `peek --set` refuses every key outside `PEEK_ENV_KEYS` (`AGENT_BRIDGE_TOKEN`, `NODE_OPTIONS` tested). The de-dup regex is built from an already validated agent name, so it has no metacharacters, and `name` vs `name-2` is not confused (`(\s|$)`).
+- `peek` prints only counts and sender names; sender names are validated on every backend (`human:<[a-z0-9._-]>` on Slack), so the hook cannot carry injected text.
+
+Slack
+- Sender identity (metadata `from`, `username` override, forged `to`/`hop`/`type`/`v`), reply hijack by a non-participant, hop numbers above the thread's cap, cap above 100, reply before start: all dropped by readers, as `test/slack.js` claims and as I re-checked with the fake.
+- Duplicate bot names: neither bot is trusted for sending, receiving or `@name`/`<@ID>` addressing. A bot that is not a channel member is ignored. A bot message without metadata is never treated as a human. A human's post with metadata is not treated as an agent message.
+- Escaping: `<!channel>`, `<@U..>`, `<https://x|y>` in body and subject are escaped; `&amp;lt;` round-trips; header fields are validated names/timestamps.
+- Claim: the ✅ only counts when added by the receiving bot itself (another member's ✅ does not mark a message read); `already_reacted` yields exactly one claimant. `postMessage` and `reactions.add` are not retried.
+- String comparison of Slack timestamps (`thread > m.ts`, `id > afterId`) is only wrong for 9- or 11-digit ids, which cannot exist as thread starts.
+
+Cross-backend
+- Hop caps, two-participant threads, and per-thread cap are enforced by the store on SQLite, Supabase and relay, and by each reader on Slack. Identity comes from the token (Supabase, relay) or the bot user (Slack); only SQLite trusts `AGENT_NAME`, as documented.
+- Differences noted but not security relevant: SQLite queues mail for unknown agents while Supabase/relay refuse; relay lower-cases thread ids, SQLite does not; `p_limit` 0 clamps to 1 on the relay and to the default on SQLite.
+
+## Summary
+
+| id | severity | status | title |
+|---|---|---|---|
+| R2-01 | medium | CONFIRMED | `RELAY_LEGAL_HOLD=true/yes/on` silently leaves the hold off (purge and delete-agent run) |
+| R2-02 | low | CONFIRMED | `bridge_admin_purge` with a huge interval is an unaudited HTTP 500 |
+| R2-03 | medium | CONFIRMED | Empty `RELAY_TLS_CA` silently disables mutual TLS |
+| R2-04 | low | CONFIRMED | Unauthenticated requests grow the audit log without bound (~260 B each) |
+| R2-05 | low | CONFIRMED | One torn audit write makes all later entries unverifiable |
+| R2-06 | low | CONFIRMED | `init --hook` de-dup deletes the user's other hooks in the same group |
+| R2-07 | medium | CONFIRMED | Slack: 4,100 junk posts hide every older unread message; no sender limits on Slack |
+| R2-08 | low | CONFIRMED | Slack: two humans with the same username are both `human:<name>` |
+| R2-09 | medium | CONFIRMED | Export range: zone-less timestamps use the server's time zone and leak/miss messages |
+| R2-10 | low | CONFIRMED | Stale `RELAY_ADMIN_KEY` env outranks the rotated key file |
+| R2-11 | low | CONFIRMED (precondition suspected) | Any readable file is sent as the "token" to the configured URL (poisoned `.mcp.json`) |
+| R2-12 | low | CONFIRMED | Exec-form hook drops `NODE_EXTRA_CA_CERTS`; relay hook fails silently with a private CA |
+| R2-13 | low | CONFIRMED | Deeply nested argument gives an unauthenticated HTTP 500 |
+| R2-14 | low | CONFIRMED | `bridge_recent` and `peek` leave no usable audit record of disclosed messages |
+| R2-15 | medium | CONFIRMED | Slowloris: half-open and idle connections are never reaped; no connection cap |
+
+Counts: 0 critical, 0 high, 5 medium, 10 low (15 total, all confirmed by running something).

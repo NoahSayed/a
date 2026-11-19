@@ -5,6 +5,8 @@
 import { existsSync, lstatSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dlpNotice } from "./stores/dlp.js";
+import { CA_VAR, maskProxyUrl, nodeSupportsEnvProxy, proxyEnvForConfig, proxyUrlHasCredentials } from "./proxy.js";
 import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, readSecret, resolveDbPath } from "./store.js";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
@@ -28,6 +30,7 @@ Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
   limits [--rate N] [--max-unread N] [--max-mb-day N]
                                        show or change the per-agent abuse limits
   purge [days=30]                      delete messages older than N days
+  doctor [repo]                        diagnose the setup (this shell, or the repo's .mcp.json); exit 1 on FAIL
   save-token <name>                    read a token from stdin into ~/.agent-bridge/tokens/<name>.token
 Relay admin: the same commands (add-agent ... purge) work against a self-hosted relay.js when
   RELAY_URL + RELAY_ADMIN_KEY (or RELAY_ADMIN_KEY_FILE) are set; "init <repo> <name> --relay" needs RELAY_URL.
@@ -152,6 +155,8 @@ async function main() {
       await store.identify();
       const m = await store.send({ to, body: rest.join(" "), type: "request" });
       console.log(`sent #${m.id} as ${m.from_agent} (thread ${m.thread_id})`);
+      const notice = dlpNotice(m.dlp);
+      if (notice) console.log(notice);
       break;
     }
 
@@ -260,6 +265,29 @@ async function main() {
       // missing), and the POSIX single-quoted form is wrong for PowerShell. Windows therefore gets exec form.
       const hookForm = flagValue("--hook-form") || (process.platform === "win32" ? "exec" : "shell");
       if (!["shell", "exec"].includes(hookForm)) throw new Error('--hook-form must be "shell" or "exec"');
+
+      // Corporate proxy / TLS inspection: the server only sees what is in .mcp.json, so carry the
+      // shell's settings over, plus the switch that makes Node's fetch() use them. Only the
+      // backends that make network calls need this.
+      const proxyNotes = [];
+      if (slack || supabase || relay) {
+        const px = proxyEnvForConfig(process.env);
+        // Claude Code starts the server from another directory: make the CA path absolute.
+        if (px[CA_VAR]) px[CA_VAR] = resolve(expandHome(px[CA_VAR]));
+        Object.assign(env, px);
+        for (const [k, v] of Object.entries(px)) {
+          proxyNotes.push(`  ${k}=${/^(https?)_proxy$/i.test(k) ? maskProxyUrl(v) : v}`);
+        }
+        if (px.NODE_USE_ENV_PROXY) {
+          if (!nodeSupportsEnvProxy()) {
+            proxyNotes.push(`  WARNING: this Node (${process.versions.node}) is too old for NODE_USE_ENV_PROXY (needs 22.21+ or 24+); upgrade Node.`);
+          }
+          if (Object.entries(px).some(([k, v]) => /^(https?)_proxy$/i.test(k) && proxyUrlHasCredentials(v))) {
+            proxyNotes.push("  WARNING: a proxy URL contains credentials; they are now stored in plain text in the generated files. Keep them out of git.");
+          }
+        }
+      }
+
       const mcpPath = join(repoDir, ".mcp.json");
       refuseSymlink(mcpPath);
       if (flags.has("--hook")) {
@@ -274,6 +302,10 @@ async function main() {
       mcp.mcpServers.bridge = { command: process.execPath, args: [join(HERE, "server.js")], env };
       writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + "\n");
       console.log(`wrote ${mcpPath}  (agent "${name}", ${slack ? "slack " + env.SLACK_CHANNEL_ID : relay ? "relay " + env.RELAY_URL : supabase ? "supabase" : "local " + env.AGENT_BRIDGE_DB})`);
+
+      if (proxyNotes.length) {
+        console.log(`proxy/TLS settings from your shell were written to the server's env (and the hook):\n${proxyNotes.join("\n")}`);
+      }
 
       if (flags.has("--hook")) {
         const settingsPath = join(repoDir, ".claude", "settings.local.json");
@@ -445,6 +477,30 @@ async function main() {
       break;
     }
 
+    case "doctor": {
+      const { diagnose, envFromRepo, render } = await import("./doctor.js");
+      let env = process.env;
+      let execArgv = process.execArgv;
+      let where = "this shell's environment";
+      if (args[0]) {
+        const r = envFromRepo(args[0]);
+        env = r.env;
+        execArgv = []; // Claude Code starts the server, not this process
+        where = r.path;
+      }
+      const checks = await diagnose(env, { execArgv });
+      console.log(render(checks, env, `agent-bridge doctor (${where})`));
+      process.exitCode = checks.some((c) => c.level === "fail") ? 1 : 0;
+      break;
+    }
+
+    case "__probe": {
+      // internal: run by doctor in a child process so proxy/CA variables apply like in the server
+      const { probeBackend } = await import("./doctor.js");
+      console.log(JSON.stringify(await probeBackend(process.env)));
+      break;
+    }
+
     case "save-token": {
       const [name] = args;
       if (!name || !AGENT_NAME_RE.test(name)) throw new Error("usage: save-token <name>  (paste the token, then Enter)");
@@ -465,7 +521,7 @@ async function main() {
 }
 
 main().then(
-  () => flush().then(() => process.exit(0)),
+  () => flush().then(() => process.exit(process.exitCode ?? 0)),
   (e) => {
     console.error(`error: ${e.message}`);
     flush().then(() => process.exit(1));
