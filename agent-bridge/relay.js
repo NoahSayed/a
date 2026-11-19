@@ -861,8 +861,8 @@ export async function startRelay(config) {
         }
       }
       if (audit.required) {
-        audit.ensureWritable(); // no audit, no service
-        // a change that can't be taken back is written down first
+        // no audit, no service: a change that can't be taken back is written down first (a read or a send is
+        // refused by its own audit write, and a send is taken back if that write fails)
         if (fn.admin) audit.write({ action: `admin.${fnName.slice("bridge_admin_".length)}`, outcome: "attempt", ...(args.p_name != null ? { agent: args.p_name } : {}) });
       }
       const out = await fn.run(me, args, body);

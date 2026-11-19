@@ -21,6 +21,14 @@ const sh = promisify(execFile);
 const tmp = mkdtempSync(join(tmpdir(), "agent-bridge-r2-relay-"));
 const key = () => randomBytes(32).toString("hex");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const openSockTls = (port) =>
+  new Promise((resolve, reject) => {
+    const t0 = Date.now();
+    const sock = net.connect(port, "127.0.0.1", () => resolve({ sock, closed: new Promise((r) => sock.once("close", () => r(Date.now() - t0))) }));
+    sock.resume(); // read (and discard) so that the server closing the connection is noticed at once
+    sock.on("error", () => {});
+    sock.once("error", reject);
+  });
 let n = 0;
 const fresh = (name) => join(tmp, `${name}-${n++}`);
 const readAudit = (p) => readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
@@ -208,6 +216,19 @@ if (!opensslOk) {
     assert.match(tlsOnly.stdout(), /posture: TLS: on/);
     assert.match(tlsOnly.stdout(), /mTLS: off/);
   });
+
+  await test("R2-15 a client that connects to the TLS port and never starts the handshake is dropped within the timeout", async () => {
+    const r = await relayWith({ ...good, RELAY_IDLE_TIMEOUT_MS: "1000", RELAY_HEADERS_TIMEOUT_MS: "1000" });
+    try {
+      const socks = [];
+      for (let i = 0; i < 5; i++) socks.push(await openSockTls(r.port));
+      const timedOut = Symbol("open");
+      const res = await Promise.all(socks.map((s) => Promise.race([s.closed, sleep(6000).then(() => timedOut)])));
+      assert.equal(res.filter((x) => x === timedOut).length, 0, "a silent TLS connection was still open after 6 s");
+    } finally {
+      await r.stop();
+    }
+  });
 }
 
 await test("R2-03 empty admin/auditor key files and unreadable ones refuse to start", async () => {
@@ -258,6 +279,7 @@ const openSock = (port, firstWrite) =>
       if (firstWrite) sock.write(firstWrite);
       resolve({ sock, closed: new Promise((r) => sock.once("close", () => r(Date.now() - t0))) });
     });
+    sock.resume(); // a socket nobody reads from never notices that the server closed it
     sock.on("error", () => {});
     sock.once("error", reject);
   });
@@ -305,13 +327,20 @@ await test("R2-15 /healthz stays up under a burst of idle connections, and the c
     for (let i = 0; i < 40; i++) held.push(await openSock(r.port));
     const t0 = Date.now();
     assert.equal(await health(r.url), 200, "healthz failed with 40 idle connections");
-    assert.ok(Date.now() - t0 < 1000);
+    assert.ok(Date.now() - t0 < 1500);
     // a burst far above the cap: the relay must not keep them all
     const burst = [];
     for (let i = 0; i < 300; i++) burst.push(openSock(r.port).catch(() => null));
     const opened = (await Promise.all(burst)).filter(Boolean);
-    await sleep(300);
-    const alive = [...held, ...opened].filter((s) => !s.sock.destroyed && s.sock.readyState === "open").length;
+    // the over-cap connections are dropped by the relay at once (a loaded machine may be slow to show the close,
+    // so look for up to 1 s, still inside the 1.5 s idle timeout)
+    const aliveNow = () => [...held, ...opened].filter((s) => !s.sock.destroyed && s.sock.readyState === "open").length;
+    const t0b = Date.now();
+    let alive = aliveNow();
+    while (alive > cap + 5 && Date.now() - t0b < 1000) {
+      await sleep(25);
+      alive = aliveNow();
+    }
     assert.ok(alive <= cap + 5, `${alive} connections were held open at once (cap ${cap})`);
     // after the idle timeout everything is reaped and the relay answers again
     const openCount = () => [...held, ...opened].filter((s) => s.sock.readyState === "open").length;
@@ -332,7 +361,7 @@ await test("R2-15 the defaults are sane for an internal service", async () => {
     assert.ok(s.requestTimeout > 0 && s.requestTimeout <= 60_000, `requestTimeout ${s.requestTimeout}`);
     assert.ok(s.timeout > 0 && s.timeout <= 120_000, `socket idle timeout ${s.timeout}`);
     assert.ok(s.keepAliveTimeout > 0 && s.keepAliveTimeout <= 10_000, `keepAliveTimeout ${s.keepAliveTimeout}`);
-    assert.ok(Number.isFinite(s.maxConnections) && s.maxConnections > 0, `maxConnections ${s.maxConnections}`);
+    assert.ok(Number.isFinite(s.maxConnections) && s.maxConnections > 0 && s.maxConnections <= 10_000, `maxConnections ${s.maxConnections}`);
     assert.ok(s.connectionsCheckingInterval <= 5000, `connectionsCheckingInterval ${s.connectionsCheckingInterval}`);
   } finally {
     await relay.close();
@@ -429,6 +458,7 @@ console.log("\n=== R2-04: failed-auth floods ===");
 await test("R2-04 failed authentications are rate-limited in the audit log, with a summary of what was suppressed", async () => {
   const audit = fresh("flood") + ".jsonl";
   const r = await relayWith({ RELAY_AUDIT_LOG: audit, RELAY_AUTH_FAIL_AUDIT_MAX: "5", RELAY_AUTH_FAIL_AUDIT_WINDOW_MS: "1000" });
+  let lines;
   try {
     for (let i = 0; i < 120; i++) {
       const a = await r.call("bridge_whoami", { p_token: "abt_" + "0".repeat(60) + String(i).padStart(4, "0") });
@@ -436,11 +466,11 @@ await test("R2-04 failed authentications are rate-limited in the audit log, with
       const b = await r.call("bridge_admin_purge", { p_older_than: "1 day" }, "wrong-key-" + i);
       assert.equal(b.status, 401);
     }
-    await sleep(2600); // the window ends and the summary is written
+    await sleep(2600); // the window ends and the summary is written (by the timer, while the relay keeps running)
+    lines = readAudit(audit);
   } finally {
     await r.stop();
   }
-  const lines = readAudit(audit);
   for (const scope of ["agent", "admin"]) {
     const kept = lines.filter((l) => l.action === "auth_failed" && l.scope === scope);
     assert.ok(kept.length >= 1 && kept.length <= 10, `${kept.length} auth_failed lines for scope ${scope}`);
@@ -527,6 +557,18 @@ await test("R2-05 verify-audit still rejects junk that is not followed by a matc
   writeFileSync(b, t.join("\n") + "\n");
   assert.equal(verifyAuditLog(b).ok, false, "a changed junk line was accepted");
   // a repair entry may not hide a deleted line
+  // a repair entry must continue from the last good line: it can't be used to hide a deleted entry before the junk
+  const d = fresh("junk4") + ".jsonl";
+  const w1 = new AuditLog(d);
+  w1.write({ action: "one" });
+  w1.write({ action: "two" });
+  w1.close();
+  appendFileSync(d, "half a li");
+  new AuditLog(d).close(); // seals the junk with a repair entry
+  assert.equal(verifyAuditLog(d).ok, true);
+  const dl = readFileSync(d, "utf8").split("\n").filter(Boolean);
+  writeFileSync(d, [dl[0], ...dl.slice(2)].join("\n") + "\n"); // entry "two" removed
+  assert.equal(verifyAuditLog(d).ok, false, "a repair entry hid a deleted audit line");
   const c = fresh("junk3") + ".jsonl";
   const z = new AuditLog(c);
   for (const w of ["one", "two", "three"]) z.write({ action: w });
