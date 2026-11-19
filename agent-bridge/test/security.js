@@ -42,7 +42,10 @@ for (const make of await backendsFromArgs(args.length ? args : ["supabase-local"
     const aliceBobThread = first.json.thread_id;
 
     await test("no apikey -> 401", async () => {
-      assert.equal((await http("GET", "bridge_messages", { key: null })).status, 401);
+      const r = await http("GET", "bridge_messages", { key: null });
+      // the relay has no table endpoints at all: it answers 404 and says nothing about what exists
+      if (b.kind === "relay") assert.ok([401, 404].includes(r.status) && !/bridge_|token|secret/.test(r.text), `${r.status} ${r.text}`);
+      else assert.equal(r.status, 401);
     });
 
     await test("tables are unreadable with the publishable key", async () => {
@@ -177,7 +180,8 @@ for (const make of await backendsFromArgs(args.length ? args : ["supabase-local"
       assert.equal(self.status, 400, self.text);
     });
 
-    await test("a new-style key in the Authorization header is rejected (client must not send it)", async () => {
+    // Supabase's gateway behaviour; the relay ignores Authorization and the apikey on agent calls
+    if (b.kind !== "relay") await test("a new-style key in the Authorization header is rejected (client must not send it)", async () => {
       const r = await rpc("bridge_whoami", { p_token: T.alice }, { bearer: b.publishable });
       assert.equal(r.status, 401);
     });

@@ -3,10 +3,11 @@
 //   Local (same machine):   AGENT_NAME, optional AGENT_BRIDGE_DB
 //   Supabase (any machine): SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY,
 //                           AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE
+//   Relay (self-hosted):    RELAY_URL, AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE (see relay.js)
 //   Slack (any machine):    SLACK_CHANNEL_ID, SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_FILE
 //
-// AGENT_BRIDGE_BACKEND=sqlite|supabase|slack forces one; otherwise SUPABASE_URL selects
-// Supabase, then SLACK_CHANNEL_ID selects Slack, else SQLite.
+// AGENT_BRIDGE_BACKEND=sqlite|supabase|relay|slack forces one; otherwise SUPABASE_URL selects
+// Supabase, then RELAY_URL the relay, then SLACK_CHANNEL_ID selects Slack, else SQLite.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -21,7 +22,7 @@ export function resolveDbPath(p = process.env.AGENT_BRIDGE_DB) {
   return expandHome(p && p.trim() ? p.trim() : "~/.agent-bridge/bridge.db");
 }
 
-export const BACKENDS = ["sqlite", "supabase", "slack"];
+export const BACKENDS = ["sqlite", "supabase", "relay", "slack"];
 
 export function backendFromEnv(env = process.env) {
   const forced = (env.AGENT_BRIDGE_BACKEND || "").trim().toLowerCase();
@@ -30,6 +31,7 @@ export function backendFromEnv(env = process.env) {
   }
   if (forced) return forced;
   if (env.SUPABASE_URL) return "supabase";
+  if (env.RELAY_URL) return "relay";
   if (env.SLACK_CHANNEL_ID) return "slack";
   return "sqlite";
 }
@@ -62,6 +64,19 @@ export async function createStore({ env = process.env, agentName = env.AGENT_NAM
       key: env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY,
       token: readToken(env),
     });
+  }
+  if (backend === "relay") {
+    // A self-hosted relay.js speaks Supabase's RPC protocol; it ignores the apikey for agent calls
+    // (the token decides who the caller is).
+    const { SupabaseStore } = await import("./stores/supabase.js");
+    const { tlsFetchFromEnv } = await import("./stores/tls-fetch.js");
+    let fetchImpl;
+    try {
+      fetchImpl = tlsFetchFromEnv(env); // only with RELAY_TLS_CA / RELAY_TLS_CLIENT_CERT / RELAY_TLS_CLIENT_KEY
+    } catch (e) {
+      throw new BridgeError(`Can't read a relay TLS file: ${e.code || e.message}`);
+    }
+    return new SupabaseStore({ url: env.RELAY_URL, key: "relay", token: readToken(env), label: "relay", ...(fetchImpl ? { fetchImpl } : {}) });
   }
   if (backend === "slack") {
     const { SlackStore } = await import("./stores/slack.js");

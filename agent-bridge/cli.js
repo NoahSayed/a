@@ -5,13 +5,13 @@
 import { existsSync, lstatSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, resolveDbPath } from "./store.js";
+import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, readSecret, resolveDbPath } from "./store.js";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const HELP = `agent-bridge CLI
 
 Setup
-  init <repo> <name> ["desc"] [--hook] [--supabase] [--token-file <path>]
+  init <repo> <name> ["desc"] [--hook] [--supabase | --relay] [--token-file <path>]
                                   wire a repo's .mcp.json to the bridge (and optional hook)
 Watching (local: all traffic; Supabase: traffic of the agent whose token you use)
   whoami | agents | log [n] | tail
@@ -26,13 +26,18 @@ Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
                                        show or change the per-agent abuse limits
   purge [days=30]                      delete messages older than N days
   save-token <name>                    read a token from stdin into ~/.agent-bridge/tokens/<name>.token
+Relay admin: the same commands (add-agent ... purge) work against a self-hosted relay.js when
+  RELAY_URL + RELAY_ADMIN_KEY (or RELAY_ADMIN_KEY_FILE) are set; "init <repo> <name> --relay" needs RELAY_URL.
+  verify-audit <file>                  check a relay audit log's hash chain: prints OK or the first broken line
+  export [--from ISO] [--to ISO]       auditor: print the relay's messages as JSON Lines
+                                       (needs RELAY_URL + RELAY_AUDITOR_KEY or RELAY_AUDITOR_KEY_FILE)
 Slack (needs SLACK_CHANNEL_ID)
   slack-manifest <name> ["desc"]       print a Slack app manifest for this agent (one app per agent)
   save-slack-token <name>              read the app's bot token (xoxb-...) from stdin, store it 0600
   init <repo> <name> --slack [--hook]  wire a repo to the Slack channel
 
 Environment: AGENT_BRIDGE_DB (local), SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY,
-AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE (Supabase), SLACK_CHANNEL_ID,
+AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE (Supabase, relay), RELAY_URL (relay), SLACK_CHANNEL_ID,
 SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_FILE (Slack). See README.md.`;
 
 const argv = process.argv.slice(2);
@@ -41,7 +46,7 @@ const flagValue = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day"]);
+const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--from", "--to"]);
 const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 const [cmd, ...args] = positional;
 
@@ -78,6 +83,12 @@ const listRecent = (store, opts) => (store.allRecent ? store.allRecent(opts) : s
 
 async function admin() {
   const { SupabaseAdmin } = await import("./stores/supabase.js");
+  // A self-hosted relay speaks the same admin RPCs; its admin key goes where Supabase's secret key does.
+  const relayKey = process.env.RELAY_URL ? readSecret(process.env, "RELAY_ADMIN_KEY") : null;
+  if (relayKey) return new SupabaseAdmin({ url: process.env.RELAY_URL, secretKey: relayKey, label: "relay" });
+  if (process.env.RELAY_URL && !process.env.SUPABASE_URL) {
+    throw new Error("Admin commands on a relay need RELAY_ADMIN_KEY (or RELAY_ADMIN_KEY_FILE).");
+  }
   return new SupabaseAdmin({
     url: process.env.SUPABASE_URL,
     secretKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -162,7 +173,8 @@ async function main() {
       if (!existsSync(repoDir)) throw new Error(`no such directory: ${repoDir}`);
       const supabase = flags.has("--supabase");
       const slack = flags.has("--slack");
-      if (supabase && slack) throw new Error("choose one of --supabase or --slack");
+      const relay = flags.has("--relay");
+      if (supabase + slack + relay > 1) throw new Error("choose one of --supabase, --relay or --slack");
       const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {});
 
       let env;
@@ -176,6 +188,21 @@ async function main() {
         // The bot token stays out of the repo: .mcp.json only points at the token file.
         env = { AGENT_NAME: name, AGENT_BRIDGE_BACKEND: "slack", SLACK_CHANNEL_ID: channel, SLACK_BOT_TOKEN_FILE: tf };
         if (process.env.SLACK_API_URL) env.SLACK_API_URL = process.env.SLACK_API_URL;
+      } else if (relay) {
+        const url = process.env.RELAY_URL;
+        if (!url) throw new Error("--relay needs RELAY_URL (the relay's address, like https://bridge.internal:8787) in your shell.");
+        const tf = expandHome(flagValue("--token-file") || tokenPath(name));
+        if (!existsSync(tf)) {
+          throw new Error(
+            `no token file at ${tf}. Get a token with "add-agent ${name} --save" (admin) ` +
+              `or "save-token ${name}" (token from your admin), then re-run init.`
+          );
+        }
+        env = { AGENT_NAME: name, AGENT_BRIDGE_BACKEND: "relay", RELAY_URL: url, AGENT_BRIDGE_TOKEN_FILE: tf };
+        // a private CA / client certificate for the relay's TLS: file paths only, never key material
+        for (const k of ["NODE_EXTRA_CA_CERTS", "RELAY_TLS_CA", "RELAY_TLS_CLIENT_CERT", "RELAY_TLS_CLIENT_KEY"]) {
+          if (process.env[k]) env[k] = expandHome(process.env[k]);
+        }
       } else if (supabase) {
         const url = process.env.SUPABASE_URL;
         const key = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
@@ -212,7 +239,7 @@ async function main() {
       else if (prevDesc) env.AGENT_DESCRIPTION = prevDesc;
       mcp.mcpServers.bridge = { command: process.execPath, args: [join(HERE, "server.js")], env };
       writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + "\n");
-      console.log(`wrote ${mcpPath}  (agent "${name}", ${slack ? "slack " + env.SLACK_CHANNEL_ID : supabase ? "supabase" : "local " + env.AGENT_BRIDGE_DB})`);
+      console.log(`wrote ${mcpPath}  (agent "${name}", ${slack ? "slack " + env.SLACK_CHANNEL_ID : relay ? "relay " + env.RELAY_URL : supabase ? "supabase" : "local " + env.AGENT_BRIDGE_DB})`);
 
       if (flags.has("--hook")) {
         const settingsPath = join(repoDir, ".claude", "settings.local.json");
@@ -291,6 +318,39 @@ async function main() {
       const days = Number(args[0] || 30);
       if (!(days >= 0)) throw new Error("usage: purge [days]");
       console.log(`deleted ${await (await admin()).purge(days)} message(s) older than ${days} day(s)`);
+      break;
+    }
+
+    case "verify-audit": {
+      const [file] = args;
+      if (!file) throw new Error("usage: verify-audit <audit-log-file>");
+      const { verifyAuditLog } = await import("./relay-audit.js");
+      const r = verifyAuditLog(expandHome(file));
+      if (!r.ok) {
+        console.log(`BROKEN at line ${r.line}: ${r.reason}`);
+        process.exit(1);
+      }
+      console.log(`OK (${r.lines} line(s); last hash ${r.last})`);
+      break;
+    }
+
+    case "export": {
+      const key = readSecret(process.env, "RELAY_AUDITOR_KEY");
+      if (!process.env.RELAY_URL || !key) throw new Error("export needs RELAY_URL and RELAY_AUDITOR_KEY (or RELAY_AUDITOR_KEY_FILE).");
+      const { SupabaseAdmin } = await import("./stores/supabase.js");
+      const a = new SupabaseAdmin({ url: process.env.RELAY_URL, secretKey: key, label: "relay" });
+      let after = 0;
+      for (;;) {
+        const rows = await a.store.rpc("bridge_admin_export", {
+          p_from: flagValue("--from") ?? null,
+          p_to: flagValue("--to") ?? null,
+          p_after_id: after,
+          p_limit: 1000,
+        });
+        for (const m of rows) console.log(JSON.stringify(m));
+        if (rows.length < 1000) break;
+        after = rows[rows.length - 1].id;
+      }
       break;
     }
 

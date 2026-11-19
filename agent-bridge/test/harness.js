@@ -78,7 +78,7 @@ export function runCli(args, env, { input } = {}) {
 function cleanEnv() {
   const env = { ...process.env };
   for (const k of Object.keys(env)) {
-    if (/^(AGENT_|SUPABASE_)/.test(k)) delete env[k];
+    if (/^(AGENT_|SUPABASE_|RELAY_)/.test(k)) delete env[k];
   }
   return env;
 }

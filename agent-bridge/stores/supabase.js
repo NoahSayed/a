@@ -7,8 +7,10 @@ import { BridgeError, NetworkError, isUuid, validateAgentName, validateOutgoing 
 const TIMEOUT_MS = 15000;
 
 export class SupabaseStore {
-  constructor({ url, key, token, fetchImpl = globalThis.fetch }) {
-    if (!url) throw new BridgeError("SUPABASE_URL is not set.");
+  // label: "supabase", or "relay" for a self-hosted relay.js, which speaks the same protocol.
+  constructor({ url, key, token, fetchImpl = globalThis.fetch, label = "supabase" }) {
+    this.label = label;
+    if (!url) throw new BridgeError(label === "relay" ? "RELAY_URL is not set." : "SUPABASE_URL is not set.");
     if (!key) throw new BridgeError("SUPABASE_PUBLISHABLE_KEY is not set.");
     if (!token) throw new BridgeError("No agent token: set AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE.");
     this.url = url.replace(/\/+$/, "");
@@ -20,7 +22,7 @@ export class SupabaseStore {
   }
 
   describe() {
-    return `supabase:${this.url}`;
+    return `${this.label}:${this.url}`;
   }
 
   // PostgREST RPC call. New Supabase keys (sb_publishable_/sb_secret_) must go ONLY in the
@@ -44,7 +46,7 @@ export class SupabaseStore {
           await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
           continue;
         }
-        throw new NetworkError(`Can't reach Supabase (${this.url}): ${e.cause?.code || e.cause?.message || e.name || e.message}`);
+        throw new NetworkError(`Can't reach ${this.label === "relay" ? "the relay" : "Supabase"} (${this.url}): ${e.cause?.code || e.cause?.message || e.name || e.message}`);
       }
       if (res.status >= 500 && attempt < retries) {
         await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
@@ -65,7 +67,9 @@ export class SupabaseStore {
         const msg = (data && (data.message || data.msg || data.error)) || `HTTP ${res.status}`;
         if (res.status === 404 && data?.code === "PGRST202") {
           throw new BridgeError(
-            `Supabase function ${fn} not found. Run supabase/migration.sql in your project first.`
+            this.label === "relay"
+              ? `Relay function ${fn} not found. Is RELAY_URL really an agent-bridge relay (and the same version)?`
+              : `Supabase function ${fn} not found. Run supabase/migration.sql in your project first.`
           );
         }
         throw res.status >= 500 ? new NetworkError(msg) : new BridgeError(msg);
@@ -147,9 +151,9 @@ export class SupabaseStore {
 
 // Admin calls need the project's SECRET key (sb_secret_... or legacy service_role JWT).
 export class SupabaseAdmin {
-  constructor({ url, secretKey, fetchImpl = globalThis.fetch }) {
+  constructor({ url, secretKey, fetchImpl = globalThis.fetch, label = "supabase" }) {
     if (!secretKey) throw new BridgeError("Admin commands need SUPABASE_SECRET_KEY (the project's secret key).");
-    this.store = new SupabaseStore({ url, key: secretKey, token: "admin-unused-token-value", fetchImpl });
+    this.store = new SupabaseStore({ url, key: secretKey, token: "admin-unused-token-value", fetchImpl, label });
   }
   createAgent(name, description = null) {
     return this.store.rpc("bridge_admin_create_agent", { p_name: name, p_description: description });
