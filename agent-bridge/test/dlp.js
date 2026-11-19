@@ -198,6 +198,7 @@ await test("false positives: the everyday strings of an engineering chat are not
     "const token = getToken()",
     "const token = await getToken();",
     "const token = getToken2();",
+    "exports.MD5Password = AuthenticationMD5Password;",
     "const token = refreshToken;",
     "password = prompt",
     "let password = prompt('Password?')",

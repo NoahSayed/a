@@ -280,6 +280,8 @@ const MUTATIONS = [
     find: `-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----(?:`, replace: `-----BEGIN (?:[A-Z0-9]+ )*(?:PRIVATE|PUBLIC) KEY(?: BLOCK)?-----(?:`, suite: DLP },
   { name: "HD DLP assignment: calls and indexes flagged", file: "stores/dlp.js",
     find: `  if (/[([{<]/.test(v)) return false; // a call, an index, a placeholder`, replace: ``, suite: DLP },
+  { name: "HD DLP assignment: code statements flagged", file: "stores/dlp.js",
+    find: `      if (text[end] === ";" || !looksLikeSecret(value, false)) continue;`, replace: `      if (!looksLikeSecret(value, false)) continue;`, suite: DLP },
   { name: "HD DLP assignment: bare identifiers flagged", file: "stores/dlp.js",
     find: `  return digit || symbol; // bare words are usually identifiers`, replace: `  return true;`, suite: DLP },
   { name: "HD DLP assignment: placeholders flagged", file: "stores/dlp.js",

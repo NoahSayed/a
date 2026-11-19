@@ -176,7 +176,8 @@ function* assignmentFindings(text) {
       end = start;
       while (end < text.length && !/[\s,;"'`)}\]]/.test(text[end])) end++;
       value = text.slice(start, end);
-      if (!looksLikeSecret(value, false)) continue;
+      // "X.MD5Password = AuthenticationMD5Password;": a code statement assigning another name
+      if (text[end] === ";" || !looksLikeSecret(value, false)) continue;
     }
     yield { kind: "secret-assignment", start, end };
   }
