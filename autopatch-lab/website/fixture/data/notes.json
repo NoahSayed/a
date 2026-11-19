@@ -1,6 +1,18 @@
 {
-  "1": { "text": "No nuts please", "owner": "alice" },
-  "2": { "text": "Ring the bell twice", "owner": "bob" },
-  "3": { "text": "", "owner": "alice" },
-  "4": { "text": "Leave at the back door", "owner": "bob" }
+  "1": {
+    "text": "No nuts please",
+    "owner": "alice"
+  },
+  "2": {
+    "text": "Ring the bell twice",
+    "owner": "bob"
+  },
+  "3": {
+    "text": "",
+    "owner": "alice"
+  },
+  "4": {
+    "text": "Leave at the back door",
+    "owner": "bob"
+  }
 }

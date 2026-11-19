@@ -22,7 +22,7 @@ export function sh(cmd, args, opts = {}) {
 /** Guard so a bad variable can never make us delete something outside the lab scratch directory. */
 export function safeRm(p) {
   const abs = path.resolve(p);
-  if (!abs.startsWith(SCRATCH + path.sep) || abs.split(path.sep).length < SCRATCH.split(path.sep).length + 2) throw new Error(`refusing to delete ${abs}`);
+  if (!abs.startsWith(SCRATCH + path.sep) || abs.split(path.sep).length < SCRATCH.split(path.sep).length + 1) throw new Error(`refusing to delete ${abs}`);
   fs.rmSync(abs, { recursive: true, force: true });
 }
 

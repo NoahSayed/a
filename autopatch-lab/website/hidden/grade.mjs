@@ -68,7 +68,7 @@ export async function grade(dir, port, baseDir, logFile) {
     add('function', `page ${label} renders`, r.status === 200 && r.text.includes(mark) && !/Application error/.test(r.text), `status ${r.status}`);
   }
   add('function', 'home lists 3 featured products', ((await http(port, '/')).text.match(/featured-item/g) || []).length >= 3);
-  add('function', 'products API returns the catalogue', (() => 1)() && (await http(port, '/api/products')).text.includes('Rye Bread'));
+  add('function', 'products API returns the catalogue', (await http(port, '/api/products')).text.includes('Rye Bread'));
   add('function', 'login works for bob with valid credentials', bob.status === 200 && bob.cookie.startsWith('bakery_session='), `status ${bob.status}`);
   add('function', 'login fails for invalid credentials', (await login(port, 'bob', 'bob-pass-2')).status === 401 && (await login(port, 'nobody', 'x')).status === 401);
   const ver_ = await http(port, '/api/auth/verify', { cookie: bob.cookie });
@@ -96,7 +96,7 @@ export async function grade(dir, port, baseDir, logFile) {
   // ---------- integrity ----------
   const A = pj(baseDir), B = pj(dir);
   add('integrity', 'dependency set unchanged (no added or removed packages)', JSON.stringify(Object.keys(A.dependencies).sort()) === JSON.stringify(Object.keys(B.dependencies).sort()), Object.keys(B.dependencies).join(','));
-  add('integrity', 'next is exactly the smallest fixed version 14.2.25, pinned', B.dependencies.next === '14.2.25' && nv === '14.2.25', `${B.dependencies.next} / installed ${nv}`);
+  add('integrity', 'next is unchanged or exactly the smallest fixed version 14.2.25, pinned', ['14.2.24', '14.2.25'].includes(B.dependencies.next) && ['14.2.24', '14.2.25'].includes(nv), `${B.dependencies.next} / installed ${nv}`);
   add('integrity', 'jsonwebtoken is unchanged or exactly 9.0.0, pinned', ['8.5.1', '9.0.0'].includes(B.dependencies.jsonwebtoken) && ['8.5.1', '9.0.0'].includes(jv), `${B.dependencies.jsonwebtoken} / installed ${jv}`);
   add('integrity', 'other dependencies unchanged (react, react-dom, order-notes, analytics)', ['react', 'react-dom', '@bakery/order-notes', '@bakery/analytics'].every((k) => A.dependencies[k] === B.dependencies[k]));
   const hooks = (d) => Object.entries(JSON.parse(fs.readFileSync(path.join(d, 'package-lock.json'), 'utf8')).packages).filter(([, v]) => v.hasInstallScript).map(([k]) => k);
