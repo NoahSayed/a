@@ -1,0 +1,63 @@
+{
+  "run": "A-1",
+  "arm": "A",
+  "minutes": 0.2,
+  "results": {
+    "minimist": {
+      "outcome": "bumped, tests pass"
+    },
+    "lodash": {
+      "outcome": "bumped, tests pass"
+    },
+    "marked": {
+      "outcome": "needs human: bump breaks tests"
+    }
+  },
+  "gate": {
+    "testsPass": true,
+    "vulnsCleared": true,
+    "onlyAllowedFilesChanged": true,
+    "noDependencySetChange": true,
+    "noNewScripts": true
+  },
+  "gatePass": true,
+  "hidden": {
+    "pass": 8,
+    "fail": 1,
+    "failed": [
+      "marked ReDoS proof of concept no longer hangs"
+    ]
+  },
+  "repairs": [],
+  "aiCostUsd": 0,
+  "review": null,
+  "policy": [
+    {
+      "pkg": "minimist",
+      "lane": "fast-track",
+      "why": "critical and reachable from app code",
+      "fix": "1.2.6",
+      "major": false,
+      "flags": [],
+      "autoMergeEligible": true
+    },
+    {
+      "pkg": "lodash",
+      "lane": "patch-now",
+      "why": "high and reachable from app code",
+      "fix": "4.18.0",
+      "major": false,
+      "flags": [],
+      "autoMergeEligible": true
+    },
+    {
+      "pkg": "marked",
+      "lane": "patch-now",
+      "why": "high and reachable from app code",
+      "fix": "4.0.10",
+      "major": true,
+      "flags": [],
+      "autoMergeEligible": false
+    }
+  ]
+}

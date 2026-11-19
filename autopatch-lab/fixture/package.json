@@ -1,0 +1,15 @@
+{
+  "name": "notes-cli",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tiny CLI that renders markdown notes to HTML pages. Test fixture with deliberately old dependencies.",
+  "main": "src/app.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "lodash": "4.17.20",
+    "marked": "2.0.0",
+    "minimist": "1.2.5"
+  }
+}

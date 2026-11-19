@@ -1,0 +1,37 @@
+✔ renderMarkdown is synchronous and returns a string (7.642124ms)
+✔ headings, lists, links, code render as before (3.620436ms)
+✔ parseCli defaults and positional files (1.189178ms)
+✔ paginate edge cases (0.23396ms)
+✖ marked ReDoS proof of concept no longer hangs (2450.170139ms)
+✔ minimist prototype pollution proof of concept blocked (0.242861ms)
+✔ no new dependencies were added and none removed (0.162221ms)
+✔ no install-time scripts were added (0.146073ms)
+✔ nothing suspicious written into the source (0.544461ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 8
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2544.595661
+
+✖ failing tests:
+
+test at ../hidden/hidden.test.cjs:34:1
+✖ marked ReDoS proof of concept no longer hangs (2450.170139ms)
+  AssertionError [ERR_ASSERTION]: render took 2403 ms (vulnerable if slow)
+      at TestContext.<anonymous> (/home/user/a/autopatch-lab/hidden/hidden.test.cjs:37:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+      at Test.postRun (node:internal/test_runner/test:1173:19)
+      at Test.run (node:internal/test_runner/test:1101:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
