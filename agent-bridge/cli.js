@@ -13,10 +13,13 @@ const HELP = `agent-bridge CLI
 Setup
   init <repo> <name> ["desc"] [--hook] [--supabase] [--token-file <path>]
                                   wire a repo's .mcp.json to the bridge (and optional hook)
+       --hook-form shell|exec     "shell": one POSIX shell command (default on macOS/Linux);
+                                  "exec": command + args, no shell (default on Windows)
 Watching (local: all traffic; Supabase: traffic of the agent whose token you use)
   whoami | agents | log [n] | tail
   send <to> <text...>             send as AGENT_NAME (local, default "human") or as the token's agent
-  peek [name]                     print an "unread mail" note if any (used by the hook)
+  peek [name] [--mcp <file>]      print an "unread mail" note if any (used by the hook; --mcp takes
+                                  the bridge's env from that .mcp.json instead of the environment)
 Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
   add-agent <name> ["desc"] [--save]   register an agent, print its token (--save: store it locally)
   rotate-token <name> [--save]         issue a new token (old one stops working)
@@ -41,9 +44,12 @@ const flagValue = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day"]);
+const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--mcp", "--hook-form"]);
 const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 const [cmd, ...args] = positional;
+
+// Let stdout/stderr drain before process.exit(), which can cut off piped output on some platforms.
+const flush = () => new Promise((r) => process.stdout.write("", () => process.stderr.write("", r)));
 
 // POSIX single-quoting: nothing inside is expanded by the shell that runs the hook (R1-06).
 const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
@@ -135,10 +141,20 @@ async function main() {
       // Used as a Claude Code UserPromptSubmit hook: stdout is added to the agent's context.
       // Never fails loudly: a broken bridge must not block the user's prompt.
       try {
-        const agent = args[0] || process.env.AGENT_NAME;
-        if (backendFromEnv() === "sqlite" && !agent) return;
+        // --mcp: a hook can't carry env vars portably (exec form has no shell, and PowerShell and POSIX
+        // shells disagree on syntax), so it points at the .mcp.json that init wrote and takes the
+        // bridge's env from there: the values the server gets, never expanded by a shell.
+        let env = process.env;
+        const mcpFile = flagValue("--mcp");
+        if (mcpFile) {
+          const cfg = JSON.parse(readFileSync(mcpFile, "utf8")).mcpServers?.bridge?.env || {};
+          env = { ...process.env };
+          for (const [k, v] of Object.entries(cfg)) if (typeof v === "string" && k !== "AGENT_DESCRIPTION") env[k] = v;
+        }
+        const agent = args[0] || env.AGENT_NAME;
+        if (backendFromEnv(env) === "sqlite" && !agent) return;
         // Short busy timeout: on SQLite the read is synchronous, so the race below can't cut it short (R1-08).
-        const store = await createStore({ agentName: agent, busyTimeoutMs: 1500 });
+        const store = await createStore({ env, agentName: agent, busyTimeoutMs: 1500 });
         const summary = await Promise.race([
           store.unreadSummary(),
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000)),
@@ -151,6 +167,7 @@ async function main() {
         // stay silent so a broken bridge never blocks the prompt; AGENT_BRIDGE_DEBUG=1 shows why
         if (process.env.AGENT_BRIDGE_DEBUG) console.error(`agent-bridge peek: ${e.message}`);
       }
+      await flush();
       process.exit(0);
     }
 
@@ -199,6 +216,10 @@ async function main() {
         env = { AGENT_NAME: name, AGENT_BRIDGE_DB: resolveDbPath() };
       }
 
+      // Claude Code runs shell-form hooks with sh (macOS/Linux) or Git Bash (Windows; PowerShell if Git Bash is
+      // missing), and the POSIX single-quoted form is wrong for PowerShell. Windows therefore gets exec form.
+      const hookForm = flagValue("--hook-form") || (process.platform === "win32" ? "exec" : "shell");
+      if (!["shell", "exec"].includes(hookForm)) throw new Error('--hook-form must be "shell" or "exec"');
       const mcpPath = join(repoDir, ".mcp.json");
       refuseSymlink(mcpPath);
       if (flags.has("--hook")) {
@@ -220,17 +241,25 @@ async function main() {
         const settings = readJson(settingsPath);
         settings.hooks ??= {};
         settings.hooks.UserPromptSubmit ??= [];
-        const envPrefix = Object.entries(env)
-          .filter(([k]) => k !== "AGENT_DESCRIPTION")
-          .map(([k, v]) => `${k}=${shq(v)}`)
-          .join(" ");
-        const command = `${envPrefix} ${shq(process.execPath)} ${shq(join(HERE, "cli.js"))} peek ${shq(name)}`;
-        // Drop any earlier agent-bridge hook for this agent (quoted or not) so re-running init doesn't stack them.
+        let hook;
+        if (hookForm === "exec") {
+          // No shell at all (Claude Code "exec form": command + args), so it behaves the same under Git Bash,
+          // PowerShell and sh. The env comes from the .mcp.json written above (peek --mcp).
+          hook = { type: "command", command: process.execPath, args: [join(HERE, "cli.js"), "peek", name, "--mcp", mcpPath], timeout: 10 };
+        } else {
+          const envPrefix = Object.entries(env)
+            .filter(([k]) => k !== "AGENT_DESCRIPTION")
+            .map(([k, v]) => `${k}=${shq(v)}`)
+            .join(" ");
+          hook = { type: "command", command: `${envPrefix} ${shq(process.execPath)} ${shq(join(HERE, "cli.js"))} peek ${shq(name)}`, timeout: 10 };
+        }
+        // Drop any earlier agent-bridge hook for this agent (either form, quoted or not) so re-running init doesn't stack them.
         const ours = new RegExp(`cli\\.js["']?\\s+peek\\s+["']?${name}["']?(\\s|$)`);
+        const text = (x) => [x.command, ...(Array.isArray(x.args) ? x.args : [])].map(String).join(" ");
         settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter(
-          (h) => !(h.hooks || []).some((x) => ours.test(String(x.command || "")))
+          (h) => !(h.hooks || []).some((x) => ours.test(text(x)))
         );
-        settings.hooks.UserPromptSubmit.push({ hooks: [{ type: "command", command, timeout: 10 }] });
+        settings.hooks.UserPromptSubmit.push({ hooks: [hook] });
         writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
         console.log(`wrote ${settingsPath}  (unread-mail hook)`);
       }
@@ -360,9 +389,9 @@ async function main() {
 }
 
 main().then(
-  () => process.exit(0),
+  () => flush().then(() => process.exit(0)),
   (e) => {
     console.error(`error: ${e.message}`);
-    process.exit(1);
+    flush().then(() => process.exit(1));
   }
 );

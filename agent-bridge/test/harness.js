@@ -2,12 +2,31 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export const SERVER = fileURLToPath(new URL("../server.js", import.meta.url));
 export const CLI = fileURLToPath(new URL("../cli.js", import.meta.url));
 
+export const IS_WIN = process.platform === "win32";
+
+// Env for a child process that needs a home directory: os.homedir() reads HOME on POSIX but
+// USERPROFILE on Windows, so tests that fake a home must set both. SystemRoot (Windows) is needed
+// for sockets and crypto in a child that is given an otherwise minimal environment.
+export const homeEnv = (home) => ({ HOME: home, USERPROFILE: home });
+export const baseEnv = (home) => ({
+  PATH: process.env.PATH,
+  ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+  ...(home ? homeEnv(home) : {}),
+});
+
+// rmSync that survives Windows still holding a just-closed file (SQLite, a killed child) for a moment.
+export const rmrf = (p) => rmSync(p, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+
 const results = [];
+export function skip(name, reason) {
+  console.log(`  skip ${name}\n       (${reason})`);
+}
 export async function test(name, fn) {
   const t0 = Date.now();
   try {
@@ -63,7 +82,7 @@ export function runServerExpectExit(env, timeoutMs = 20000) {
 
 export function runCli(args, env, { input } = {}) {
   return new Promise((resolve) => {
-    const p = spawn(process.execPath, [CLI, ...args], { env: { ...cleanEnv(), ...env } });
+    const p = spawn(process.execPath, [CLI, ...args], { env: { ...cleanEnv(), ...(env?.HOME ? homeEnv(env.HOME) : {}), ...env } });
     let out = "",
       err = "";
     p.stdout.on("data", (d) => (out += d));
