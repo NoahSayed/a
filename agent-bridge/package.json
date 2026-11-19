@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/e2e.js sqlite supabase-local slack-local && node test/security.js supabase-local && node test/slack.js && node test/concurrency.js sqlite supabase-local slack-local && node test/cli.js && node test/regressions-r1.js",
+    "relay": "node relay.js",
+    "test:relay": "node test/e2e.js relay-local && node test/security.js relay-local && node test/concurrency.js relay-local && node test/relay.js",
+    "test": "node test/e2e.js sqlite supabase-local slack-local relay-local && node test/security.js supabase-local relay-local && node test/slack.js && node test/concurrency.js sqlite supabase-local slack-local relay-local && node test/cli.js && node test/regressions-r1.js && node test/relay.js",
     "test:sqlite": "node test/e2e.js sqlite && node test/concurrency.js sqlite",
     "test:e2e": "node test/e2e.js sqlite supabase-local slack-local",
     "test:security": "node test/security.js supabase-local",

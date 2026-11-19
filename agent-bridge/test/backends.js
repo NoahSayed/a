@@ -1,9 +1,11 @@
 // Test backends. Each one returns { name, envFor(agent), addAgent(name), cleanup(), ... }.
 //   sqlite         temp SQLite file
 //   supabase-local real Postgres (TEST_PG_URL) + the migration + fake PostgREST
+//   relay-local    relay.js as a child process on a random port (temp DB, random admin key)
 //   supabase-live  your real Supabase project (SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY);
 //                  creates agents with a random suffix and deletes them afterwards
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -171,12 +173,81 @@ export async function slackLocalBackend() {
   };
 }
 
+export const RELAY = join(ROOT, "relay.js");
+
+// Starts relay.js as a child process. Resolves { url, port, admin key, child, stop(), exited }
+// once it prints its "listening on" line; rejects with the exit code and stderr if it dies first.
+export function startRelayProcess({ env = {}, args = [], tls = false } = {}) {
+  const adminKey = env.RELAY_ADMIN_KEY ?? randomBytes(32).toString("hex");
+  const childEnv = { ...process.env, RELAY_HOST: "127.0.0.1", RELAY_PORT: "0", ...env };
+  for (const k of Object.keys(childEnv)) if (childEnv[k] === undefined) delete childEnv[k];
+  if (!("RELAY_ADMIN_KEY" in env) && !("RELAY_ADMIN_KEY_FILE" in env)) childEnv.RELAY_ADMIN_KEY = adminKey;
+  const child = spawn(process.execPath, [RELAY, ...args], { env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stderr.on("data", (d) => (stderr += d));
+  const exited = new Promise((r) => child.once("exit", (code) => r(code)));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`relay did not start; stdout: ${stdout} stderr: ${stderr}`));
+    }, 15000);
+    child.stdout.on("data", (d) => {
+      stdout += d;
+      const m = stdout.match(/listening on (https?):\/\/\S+:(\d+)/);
+      if (m) {
+        clearTimeout(timer);
+        resolve({
+          url: `${m[1]}://127.0.0.1:${m[2]}`,
+          port: Number(m[2]),
+          adminKey: childEnv.RELAY_ADMIN_KEY,
+          child,
+          exited,
+          stdout: () => stdout,
+          stderr: () => stderr,
+          stop: async () => {
+            if (child.exitCode === null) child.kill("SIGTERM");
+            await exited;
+          },
+        });
+      }
+    });
+    exited.then((code) => {
+      clearTimeout(timer);
+      reject(Object.assign(new Error(`relay exited with code ${code} at startup: ${stderr}`), { code, stderr }));
+    });
+  });
+}
+
+export async function relayLocalBackend() {
+  const dir = mkdtempSync(join(tmpdir(), "agent-bridge-relay-test-"));
+  const relay = await startRelayProcess({ env: { RELAY_DB: join(dir, "relay.db") } });
+  const admin = new SupabaseAdmin({ url: relay.url, secretKey: relay.adminKey });
+  const b = supabaseCommon({ name: "relay-local", url: relay.url, publishable: "relay", admin, suffix: "" });
+  b.kind = "relay";
+  b.urlVar = "RELAY_URL";
+  b.relay = relay;
+  b.secret = relay.adminKey;
+  b.envFor = (agent) => ({
+    AGENT_BRIDGE_BACKEND: "relay",
+    RELAY_URL: relay.url,
+    AGENT_BRIDGE_TOKEN: b.tokens[agent],
+    AGENT_NAME: b.nameOf(agent),
+  });
+  b.cleanup = async () => {
+    await relay.stop();
+    rmSync(dir, { recursive: true, force: true });
+  };
+  return b;
+}
+
 export async function backendsFromArgs(argv = process.argv.slice(2)) {
   const wanted = argv.length ? argv : NO_PG ? ["sqlite"] : ["sqlite", "supabase-local"];
   const make = {
     sqlite: sqliteBackend,
     "supabase-local": supabaseLocalBackend,
     "supabase-live": supabaseLiveBackend,
+    "relay-local": relayLocalBackend,
     "slack-local": slackLocalBackend,
   };
   return wanted.map((w) => {
