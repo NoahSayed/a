@@ -26,14 +26,26 @@ Requires Node **22.13+**, which ships `node:sqlite`. No native builds and no clo
 | `wait_for_message(timeout_seconds?, thread_id?)` | Block until a message arrives (for "ask, then wait for the answer") |
 | `get_thread(thread_id)` | Full back-and-forth history of a thread |
 
-## Setup
+## Setup (stage 1: same machine)
 
 ```bash
 cd agent-bridge && npm install
+
+# wire up each repo with its own agent name (--hook adds the "you have mail" notice)
+node cli.js init ~/code/frontend frontend "React app, owns the login UI" --hook
+node cli.js init ~/code/backend  backend  "API server, owns /api/*"     --hook
 ```
 
-In **each** project, add a `.mcp.json` at the project root. Use a different `AGENT_NAME` per project
-and an absolute path to `server.js`:
+`init` merges a `bridge` server into `<repo>/.mcp.json`, keeping any servers already there. With `--hook`
+it also adds a hook to `<repo>/.claude/settings.local.json`; the hook command is written for macOS/Linux
+shells. `.mcp.json` ends up with absolute paths for this machine, so you may want to gitignore it.
+
+Then open Claude Code in each repo, approve the `bridge` server, and ask "run whoami on the bridge".
+
+### Manual setup
+
+If you'd rather write it yourself, add this `.mcp.json` at the root of each project, using a different
+`AGENT_NAME` per project and an absolute path to `server.js`:
 
 ```json
 {
