@@ -1,10 +1,19 @@
 // Local backend: a SQLite file shared by every agent on the same machine.
 // Uses Node's built-in node:sqlite (Node >= 22.13), so there is nothing native to compile.
+// Behaves like the Supabase backend: same limits, same thread rules (see supabase/migration.sql).
 
-import { mkdirSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { BridgeError, LIMITS, MESSAGE_TYPES, isUuid, validateOutgoing } from "./common.js";
+import {
+  BridgeError,
+  DEFAULT_ABUSE_LIMITS,
+  LIMITS,
+  MESSAGE_TYPES,
+  isUuid,
+  validateAgentName,
+  validateOutgoing,
+} from "./common.js";
 
 // node:sqlite prints an "experimental" warning on load; keep stdout/stderr clean.
 const originalEmitWarning = process.emitWarning;
@@ -14,16 +23,34 @@ process.emitWarning = (warning, ...args) => {
 };
 const { DatabaseSync } = await import("node:sqlite");
 
+const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
+
 export class SqliteStore {
-  constructor({ agentName, dbPath }) {
+  constructor({ agentName, dbPath, busyTimeoutMs = 10000, limits = {} }) {
+    try {
+      validateAgentName(agentName, "AGENT_NAME"); // R1-09
+    } catch (e) {
+      throw new BridgeError(e.message);
+    }
     this.agent = agentName;
     this.dbPath = dbPath;
     this.pollIntervalMs = 1000;
-    mkdirSync(dirname(dbPath), { recursive: true });
+    this.limits = { ...DEFAULT_ABUSE_LIMITS, ...limits };
+
+    // The mailbox holds other projects' messages: keep it private to this user (R1-07).
+    // Only a directory we create is chmod'ed; a directory the user chose is left alone.
+    const madeDir = mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
+    if (madeDir) chmodSync(dirname(dbPath), 0o700);
+    if (!existsSync(dbPath)) closeSync(openSync(dbPath, "a", 0o600));
+    const st = statSync(dbPath);
+    if ((st.mode & 0o077) !== 0 && st.uid === process.getuid?.()) chmodSync(dbPath, 0o600);
+
     // The busy timeout must be in place before ANY statement (including the WAL switch),
     // otherwise agents that start at the same moment fail with "database is locked".
-    this.db = new DatabaseSync(dbPath, { timeout: 10000 });
-    this.db.exec("PRAGMA busy_timeout = 10000");
+    // SQLite creates -wal/-shm with the main file's permissions.
+    this.db = new DatabaseSync(dbPath, { timeout: busyTimeoutMs });
+    this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(busyTimeoutMs))}`);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agents (
@@ -43,11 +70,26 @@ export class SqliteStore {
         hop         INTEGER NOT NULL,
         created_at  TEXT NOT NULL,
         read_at     TEXT,
+        max_hops    INTEGER NOT NULL DEFAULT 20,
         UNIQUE (thread_id, hop)
       );
       CREATE INDEX IF NOT EXISTS idx_inbox  ON messages (to_agent, read_at);
       CREATE INDEX IF NOT EXISTS idx_thread ON messages (thread_id, id);
+      CREATE INDEX IF NOT EXISTS idx_from_time ON messages (from_agent, created_at);
     `);
+    // Upgrade a mailbox created by an earlier version.
+    const cols = this.db.prepare(`PRAGMA table_info(messages)`).all().map((c) => c.name);
+    if (!cols.includes("max_hops")) {
+      this.tx(() => {
+        const again = this.db.prepare(`PRAGMA table_info(messages)`).all().map((c) => c.name);
+        if (!again.includes("max_hops")) this.db.exec(`ALTER TABLE messages ADD COLUMN max_hops INTEGER NOT NULL DEFAULT 20`);
+      });
+    }
+    for (const f of [dbPath + "-wal", dbPath + "-shm"]) {
+      try {
+        if ((statSync(f).mode & 0o077) !== 0) chmodSync(f, 0o600);
+      } catch {}
+    }
   }
 
   describe() {
@@ -108,22 +150,56 @@ export class SqliteStore {
       .map((r) => ({ ...r }));
   }
 
+  checkAbuseLimits(to, body) {
+    const L = this.limits;
+    const since = (ms) => new Date(Date.now() - ms).toISOString();
+    const recent = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM messages WHERE from_agent = ? AND created_at > ?`)
+      .get(this.agent, since(MINUTE)).n;
+    if (recent >= L.ratePerMinute) {
+      throw new BridgeError(
+        `Rate limit: at most ${L.ratePerMinute} messages per minute per agent. Wait a moment and send fewer, longer messages.`
+      );
+    }
+    const backlog = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM messages WHERE from_agent = ? AND to_agent = ? AND read_at IS NULL`)
+      .get(this.agent, to).n;
+    if (backlog >= L.maxUnreadPerSender) {
+      throw new BridgeError(`"${to}" already has ${backlog} unread messages from you. Wait until they read them.`);
+    }
+    const bytes = this.db
+      .prepare(`SELECT COALESCE(SUM(LENGTH(CAST(body AS BLOB))), 0) AS n FROM messages WHERE from_agent = ? AND created_at > ?`)
+      .get(this.agent, since(DAY)).n;
+    if (bytes + Buffer.byteLength(body) > L.maxBytesPerDay) {
+      throw new BridgeError(`Daily limit: at most ${L.maxBytesPerDay} bytes of messages per agent per day.`);
+    }
+  }
+
   async send({ to, body, type = "request", subject = null, threadId = null, maxHops = 20 }) {
     validateOutgoing({ from: this.agent, to, body, type, subject, threadId });
-    const max = Math.min(Math.max(Number(maxHops) || 20, 1), LIMITS.maxHopsCap);
     const row = this.tx(() => {
+      this.checkAbuseLimits(to, body);
       let thread = threadId;
-      let n = 0;
+      let hop = 1;
+      let max = Math.min(Math.max(Number(maxHops) || 20, 1), LIMITS.maxHopsCap);
       if (!thread) {
         thread = randomUUID();
       } else {
-        const mine = this.db
-          .prepare(`SELECT 1 FROM messages WHERE thread_id = ? AND (from_agent = ? OR to_agent = ?) LIMIT 1`)
-          .get(thread, this.agent, this.agent);
-        if (!mine) throw new BridgeError(`Unknown thread_id ${thread}. Omit it to start a new thread.`);
-        n = this.db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE thread_id = ?`).get(thread).n;
+        const inThread = (who) =>
+          this.db
+            .prepare(`SELECT 1 FROM messages WHERE thread_id = ? AND (from_agent = ? OR to_agent = ?) LIMIT 1`)
+            .get(thread, who, who);
+        if (!inThread(this.agent)) throw new BridgeError(`Unknown thread_id ${thread}. Omit it to start a new thread.`);
+        // replies stay between the thread's participants (R1-02)
+        if (!inThread(to)) throw new BridgeError(`"${to}" is not part of this thread. Start a new thread to include them.`);
+        // max(hop) and the thread's own cap (R1-01, R1-10)
+        const last = this.db
+          .prepare(`SELECT hop, max_hops FROM messages WHERE thread_id = ? ORDER BY hop DESC LIMIT 1`)
+          .get(thread);
+        hop = last.hop + 1;
+        max = last.max_hops;
       }
-      if (n + 1 > max) {
+      if (hop > max) {
         throw new BridgeError(
           `Thread ${thread} hit the ${max}-message limit (loop protection). ` +
             `Ask a human before continuing, or start a new thread with a summary.`
@@ -131,29 +207,30 @@ export class SqliteStore {
       }
       const info = this.db
         .prepare(
-          `INSERT INTO messages (thread_id, from_agent, to_agent, type, subject, body, hop, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (thread_id, from_agent, to_agent, type, subject, body, hop, created_at, max_hops)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(thread, this.agent, to, type, subject, body, n + 1, this.now());
+        .run(thread, this.agent, to, type, subject, body, hop, this.now(), max);
       return this.db.prepare(`SELECT * FROM messages WHERE id = ?`).get(Number(info.lastInsertRowid));
     });
     return { ...row };
   }
 
-  async inbox({ limit = 20, markRead = true, threadId = null } = {}) {
+  async inbox({ limit = 20, markRead = true, threadId = null, fromAgent = null } = {}) {
     if (threadId != null && !isUuid(threadId)) throw new BridgeError(`Unknown thread_id ${threadId}.`);
+    if (fromAgent != null) validateAgentName(fromAgent);
     const lim = Math.min(Math.max(Number(limit) || 20, 1), 100);
     const select = () =>
-      (threadId
-        ? this.db
-            .prepare(
-              `SELECT * FROM messages WHERE to_agent = ? AND read_at IS NULL AND thread_id = ? ORDER BY id LIMIT ?`
-            )
-            .all(this.agent, threadId, lim)
-        : this.db
-            .prepare(`SELECT * FROM messages WHERE to_agent = ? AND read_at IS NULL ORDER BY id LIMIT ?`)
-            .all(this.agent, lim)
-      ).map((r) => ({ ...r }));
+      this.db
+        .prepare(
+          `SELECT * FROM messages
+            WHERE to_agent = ? AND read_at IS NULL
+              AND (? IS NULL OR thread_id = ?)
+              AND (? IS NULL OR from_agent = ?)
+            ORDER BY id LIMIT ?`
+        )
+        .all(this.agent, threadId, threadId, fromAgent, fromAgent, lim)
+        .map((r) => ({ ...r }));
     if (!markRead) return select();
     // Claim inside a write transaction so two readers never get the same message.
     return this.tx(() => {
@@ -166,6 +243,13 @@ export class SqliteStore {
       }
       return rows;
     });
+  }
+
+  // Puts claimed messages back as unread when they couldn't be delivered (R1-05).
+  async unmark(ids) {
+    if (!ids?.length) return 0;
+    const stmt = this.db.prepare(`UPDATE messages SET read_at = NULL WHERE id = ? AND to_agent = ? AND read_at IS NOT NULL`);
+    return this.tx(() => ids.reduce((n, id) => n + Number(stmt.run(id, this.agent).changes), 0));
   }
 
   async unreadSummary() {

@@ -2,7 +2,7 @@
 // Identity comes from the per-agent token; the database decides who the sender is.
 // See supabase/migration.sql for the functions called here.
 
-import { BridgeError, isUuid, validateOutgoing } from "./common.js";
+import { BridgeError, NetworkError, isUuid, validateAgentName, validateOutgoing } from "./common.js";
 
 const TIMEOUT_MS = 15000;
 
@@ -36,17 +36,22 @@ export class SupabaseStore {
           headers,
           body: JSON.stringify(args),
           signal: AbortSignal.timeout(TIMEOUT_MS),
+          // Never follow redirects: a 307/308 would re-send the token or secret key elsewhere (R1-12).
+          redirect: "error",
         });
       } catch (e) {
         if (attempt < retries) {
           await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
           continue;
         }
-        throw new BridgeError(`Can't reach Supabase (${this.url}): ${e.cause?.code || e.name || e.message}`);
+        throw new NetworkError(`Can't reach Supabase (${this.url}): ${e.cause?.code || e.cause?.message || e.name || e.message}`);
       }
       if (res.status >= 500 && attempt < retries) {
         await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
         continue;
+      }
+      if (res.status >= 300 && res.status < 400) {
+        throw new BridgeError(`Supabase answered with a redirect (HTTP ${res.status}); refusing to follow it. Check SUPABASE_URL.`);
       }
       if (res.status === 204) return null;
       const text = await res.text();
@@ -63,7 +68,7 @@ export class SupabaseStore {
             `Supabase function ${fn} not found. Run supabase/migration.sql in your project first.`
           );
         }
-        throw new BridgeError(msg);
+        throw res.status >= 500 ? new NetworkError(msg) : new BridgeError(msg);
       }
       return data;
     }
@@ -108,13 +113,20 @@ export class SupabaseStore {
   }
 
   // Not retried when marking read, for the same reason as send.
-  async inbox({ limit = 20, markRead = true, threadId = null } = {}) {
+  async inbox({ limit = 20, markRead = true, threadId = null, fromAgent = null } = {}) {
     if (threadId != null && !isUuid(threadId)) throw new BridgeError(`Unknown thread_id ${threadId}.`);
+    if (fromAgent != null) validateAgentName(fromAgent);
     return this.rpc(
       "bridge_inbox",
-      { p_token: this.token, p_limit: limit, p_mark_read: markRead, p_thread_id: threadId },
+      { p_token: this.token, p_limit: limit, p_mark_read: markRead, p_thread_id: threadId, p_from: fromAgent },
       { retries: markRead ? 0 : 2 }
     );
+  }
+
+  // Puts claimed messages back as unread when they couldn't be delivered (R1-05). Safe to retry.
+  async unmark(ids) {
+    if (!ids?.length) return 0;
+    return this.rpc("bridge_unmark", { p_token: this.token, p_ids: ids }, { retries: 2 });
   }
 
   async unreadSummary() {
@@ -147,6 +159,16 @@ export class SupabaseAdmin {
   }
   revokeAgent(name) {
     return this.store.rpc("bridge_admin_revoke_agent", { p_name: name });
+  }
+  deleteAgent(name) {
+    return this.store.rpc("bridge_admin_delete_agent", { p_name: name });
+  }
+  setLimits({ ratePerMinute = null, maxUnreadPerSender = null, maxBytesPerDay = null } = {}) {
+    return this.store.rpc("bridge_admin_set_limits", {
+      p_rate_per_minute: ratePerMinute,
+      p_max_unread_per_sender: maxUnreadPerSender,
+      p_max_bytes_per_day: maxBytesPerDay,
+    });
   }
   purge(days) {
     return this.store.rpc("bridge_admin_purge", { p_older_than: `${Number(days)} days` });

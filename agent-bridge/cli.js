@@ -2,7 +2,7 @@
 // agent-bridge CLI: set up repos, watch traffic, and (Supabase) manage agents.
 // Run with no arguments for help.
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, resolveDbPath } from "./store.js";
@@ -21,6 +21,9 @@ Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
   add-agent <name> ["desc"] [--save]   register an agent, print its token (--save: store it locally)
   rotate-token <name> [--save]         issue a new token (old one stops working)
   revoke-agent <name>                  disable an agent
+  delete-agent <name>                  remove an agent and all its messages
+  limits [--rate N] [--max-unread N] [--max-mb-day N]
+                                       show or change the per-agent abuse limits
   purge [days=30]                      delete messages older than N days
   save-token <name>                    read a token from stdin into ~/.agent-bridge/tokens/<name>.token
 
@@ -33,8 +36,23 @@ const flagValue = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && argv[i - 1] === "--token-file"));
+const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day"]);
+const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 const [cmd, ...args] = positional;
+
+// POSIX single-quoting: nothing inside is expanded by the shell that runs the hook (R1-06).
+const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
+
+// init writes into the user's repo; never through a symlink that points somewhere else (R1-14).
+function refuseSymlink(p) {
+  try {
+    if (lstatSync(p).isSymbolicLink()) {
+      throw new Error(`${p} is a symlink; refusing to write through it. Replace it with a regular file or directory.`);
+    }
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+}
 
 const tokenPath = (name) => expandHome(`~/.agent-bridge/tokens/${name}.token`);
 function saveToken(name, token) {
@@ -114,7 +132,8 @@ async function main() {
       try {
         const agent = args[0] || process.env.AGENT_NAME;
         if (backendFromEnv() === "sqlite" && !agent) return;
-        const store = await createStore({ agentName: agent });
+        // Short busy timeout: on SQLite the read is synchronous, so the race below can't cut it short (R1-08).
+        const store = await createStore({ agentName: agent, busyTimeoutMs: 1500 });
         const summary = await Promise.race([
           store.unreadSummary(),
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000)),
@@ -164,6 +183,11 @@ async function main() {
       }
 
       const mcpPath = join(repoDir, ".mcp.json");
+      refuseSymlink(mcpPath);
+      if (flags.has("--hook")) {
+        refuseSymlink(join(repoDir, ".claude"));
+        refuseSymlink(join(repoDir, ".claude", "settings.local.json"));
+      }
       const mcp = readJson(mcpPath);
       mcp.mcpServers ??= {};
       const prevDesc = mcp.mcpServers.bridge?.env?.AGENT_DESCRIPTION;
@@ -181,11 +205,13 @@ async function main() {
         settings.hooks.UserPromptSubmit ??= [];
         const envPrefix = Object.entries(env)
           .filter(([k]) => k !== "AGENT_DESCRIPTION")
-          .map(([k, v]) => `${k}="${v}"`)
+          .map(([k, v]) => `${k}=${shq(v)}`)
           .join(" ");
-        const command = `${envPrefix} "${process.execPath}" "${join(HERE, "cli.js")}" peek ${name}`;
+        const command = `${envPrefix} ${shq(process.execPath)} ${shq(join(HERE, "cli.js"))} peek ${shq(name)}`;
+        // Drop any earlier agent-bridge hook for this agent (quoted or not) so re-running init doesn't stack them.
+        const ours = new RegExp(`cli\\.js["']?\\s+peek\\s+["']?${name}["']?(\\s|$)`);
         settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter(
-          (h) => !JSON.stringify(h).includes("cli.js") || !JSON.stringify(h).includes(`peek ${name}`)
+          (h) => !(h.hooks || []).some((x) => ours.test(String(x.command || "")))
         );
         settings.hooks.UserPromptSubmit.push({ hooks: [{ type: "command", command, timeout: 10 }] });
         writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
@@ -221,6 +247,26 @@ async function main() {
       if (!name) throw new Error("usage: revoke-agent <name>");
       await (await admin()).revokeAgent(name);
       console.log(`revoked "${name}"`);
+      break;
+    }
+
+    case "delete-agent": {
+      const [name] = args;
+      if (!name) throw new Error("usage: delete-agent <name>");
+      const n = await (await admin()).deleteAgent(name);
+      console.log(`deleted "${name}" and ${n} message(s)`);
+      break;
+    }
+
+    case "limits": {
+      const num = (f) => (flagValue(f) == null ? null : Number(flagValue(f)));
+      const mb = num("--max-mb-day");
+      const out = await (await admin()).setLimits({
+        ratePerMinute: num("--rate"),
+        maxUnreadPerSender: num("--max-unread"),
+        maxBytesPerDay: mb == null ? null : Math.round(mb * 1_000_000),
+      });
+      console.log(JSON.stringify(out, null, 2));
       break;
     }
 

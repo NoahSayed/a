@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { BridgeError } from "./stores/common.js";
 
-export { BridgeError, MESSAGE_TYPES, LIMITS, AGENT_NAME_RE } from "./stores/common.js";
+export { BridgeError, NetworkError, MESSAGE_TYPES, LIMITS, AGENT_NAME_RE, isUuid } from "./stores/common.js";
 
 export const expandHome = (p) => resolve(p.startsWith("~") ? homedir() + p.slice(1) : p);
 
@@ -40,7 +40,9 @@ export function readToken(env = process.env) {
   return null;
 }
 
-export async function createStore({ env = process.env, agentName = env.AGENT_NAME } = {}) {
+const intEnv = (v) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
+
+export async function createStore({ env = process.env, agentName = env.AGENT_NAME, busyTimeoutMs } = {}) {
   const backend = backendFromEnv(env);
   if (backend === "supabase") {
     const { SupabaseStore } = await import("./stores/supabase.js");
@@ -53,5 +55,12 @@ export async function createStore({ env = process.env, agentName = env.AGENT_NAM
   const name = (agentName || "").trim();
   if (!name) throw new BridgeError("Set AGENT_NAME (e.g. AGENT_NAME=frontend).");
   const { SqliteStore } = await import("./stores/sqlite.js");
-  return new SqliteStore({ agentName: name, dbPath: resolveDbPath(env.AGENT_BRIDGE_DB) });
+  const limits = Object.fromEntries(
+    Object.entries({
+      ratePerMinute: intEnv(env.AGENT_BRIDGE_RATE_PER_MIN),
+      maxUnreadPerSender: intEnv(env.AGENT_BRIDGE_MAX_UNREAD),
+      maxBytesPerDay: intEnv(env.AGENT_BRIDGE_MAX_BYTES_PER_DAY),
+    }).filter(([, v]) => v !== undefined)
+  );
+  return new SqliteStore({ agentName: name, dbPath: resolveDbPath(env.AGENT_BRIDGE_DB), busyTimeoutMs, limits });
 }
