@@ -11,10 +11,10 @@ loosen it). On the fixed code it passes 20 of 20. Mutations: `node test/mutation
 | id | outcome | fix | tests | mutations |
 |---|---|---|---|---|
 | R2-06 | FIXED | `init --hook` filters the hooks *inside* each matcher group and drops a group only if it ends up empty; the group's `matcher` and every other hook survive | `R2-06 ...` x2 (shell and exec form): a group `[user hook, old shell hook, lint hook, old exec hook]` keeps exactly the user's two; an all-ours group goes; unrelated groups are untouched | drops the whole group; loses the matcher |
-| R2-07 | FIXED | see below | 7 tests | 13 |
+| R2-07 | FIXED | see below | 7 tests | 12 |
 | R2-08 | FIXED | a username shared by several channel members makes a sender ambiguous: the message is ignored, counted and reported (never `human:<name>`) | `R2-08 ...` | accepted as one human; ignored silently |
 | R2-11 | FIXED | token shape and file checks before any request, see below | 6 tests | 5 |
-| R2-12 | FIXED | `peek` re-runs itself once with the settings in the child's environment, see below | 4 tests | 4 |
+| R2-12 | FIXED | `peek` re-runs itself once with the settings in the child's environment, see below | 4 tests | 5 |
 
 ## R2-07: Slack scan completeness and reader-side limits
 
@@ -84,4 +84,7 @@ covers `fetch()`'s proxy on 22.13-22.20 either, so `peek` re-runs itself:
   replacing hooks written by older installs from other paths, so it was left.
 * The Slack reader limits are per scan (stateless), so a very busy channel costs up to 500 history calls per poll; `wait_for_message` polls every 3 s.
   If that is too heavy for a big channel, lower `AGENT_BRIDGE_LOOKBACK_HOURS`. An incremental scan with a cursor in memory would be the next step.
+* Test infrastructure changed: `test/fake-slack.js` gained `throttleNext(method, n)` (answer the next n calls with 429); `test/backends.js`'s
+  slack-local `setLimits` now sets `AGENT_BRIDGE_RATE_PER_MIN` / `AGENT_BRIDGE_MAX_UNREAD` for the agents (the concurrency suite sends 100 messages in
+  seconds, which the new reader limits would otherwise ignore); `test/proxy.js` imports the forward proxy from `test/forward-proxy.js`.
 * Windows/macOS were not run (Linux only): the POSIX mode checks are skipped on win32, the exec-form hook test uses `execFile` and `baseEnv`/`homeEnv`.
