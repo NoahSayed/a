@@ -73,6 +73,14 @@ jobs:
         run: node test/cli.js
       - name: Adversary round 1 regressions
         run: node test/regressions-r1.js
+      - name: Adversary round 2 regressions (Slack, hooks, tokens, exec-form proxy/CA)
+        run: node test/regressions-r2-client.js
+      - name: DLP (secrets, card numbers, IBANs; block/redact/warn/off on every backend)
+        run: node test/dlp.js
+      - name: Corporate proxy and TLS inspection (forward proxy with its own CA)
+        run: node test/proxy.js
+      - name: doctor
+        run: node test/doctor.js
 
   # macOS and Windows runners have no Postgres service containers, so only the suites that never touch
   # Postgres run here (SQLite and the Slack stand-in, plus the CLI/regression parts that need no database).
@@ -113,3 +121,5 @@ jobs:
         run: node test/cli.js
       - name: Adversary round 1 regressions (SQLite and CLI parts)
         run: node test/regressions-r1.js
+      - name: Adversary round 2 regressions (Slack, hooks, tokens, exec-form proxy/CA)
+        run: node test/regressions-r2-client.js
