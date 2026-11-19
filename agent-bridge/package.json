@@ -1,19 +1,20 @@
 {
   "name": "agent-bridge",
   "version": "0.1.0",
-  "description": "Local MCP message bridge so agents in different projects can talk to each other",
+  "description": "Message bridge so AI agents in different projects can talk: local SQLite, Supabase, or a Slack channel",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/e2e.js sqlite supabase-local && node test/security.js supabase-local && node test/concurrency.js sqlite supabase-local && node test/cli.js && node test/regressions-r1.js",
+    "test": "node test/e2e.js sqlite supabase-local slack-local && node test/security.js supabase-local && node test/slack.js && node test/concurrency.js sqlite supabase-local slack-local && node test/cli.js && node test/regressions-r1.js",
     "test:sqlite": "node test/e2e.js sqlite && node test/concurrency.js sqlite",
-    "test:e2e": "node test/e2e.js sqlite supabase-local",
+    "test:e2e": "node test/e2e.js sqlite supabase-local slack-local",
     "test:security": "node test/security.js supabase-local",
-    "test:concurrency": "node test/concurrency.js sqlite supabase-local",
+    "test:concurrency": "node test/concurrency.js sqlite supabase-local slack-local",
     "test:cli": "node test/cli.js",
     "test:regressions": "node test/regressions-r1.js",
     "test:mutations": "node test/mutations.js",
-    "test:live": "node test/e2e.js supabase-live && node test/security.js supabase-live && node test/concurrency.js supabase-live"
+    "test:live": "node test/e2e.js supabase-live && node test/security.js supabase-live && node test/concurrency.js supabase-live",
+    "test:slack": "node test/e2e.js slack-local && node test/slack.js && node test/concurrency.js slack-local"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

@@ -83,4 +83,5 @@ function cleanEnv() {
   return env;
 }
 
-export const threadOf = (text) => text.match(/thread ([0-9a-f-]{36})/)?.[1];
+// Thread ids are UUIDs (SQLite, Supabase) or message timestamps (Slack).
+export const threadOf = (text) => text.match(/in thread (\S+) \(/)?.[1];

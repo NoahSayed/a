@@ -3,8 +3,10 @@
 //   Local (same machine):   AGENT_NAME, optional AGENT_BRIDGE_DB
 //   Supabase (any machine): SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY,
 //                           AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE
+//   Slack (any machine):    SLACK_CHANNEL_ID, SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_FILE
 //
-// AGENT_BRIDGE_BACKEND=sqlite|supabase forces one; otherwise SUPABASE_URL selects Supabase.
+// AGENT_BRIDGE_BACKEND=sqlite|supabase|slack forces one; otherwise SUPABASE_URL selects
+// Supabase, then SLACK_CHANNEL_ID selects Slack, else SQLite.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,26 +21,35 @@ export function resolveDbPath(p = process.env.AGENT_BRIDGE_DB) {
   return expandHome(p && p.trim() ? p.trim() : "~/.agent-bridge/bridge.db");
 }
 
+export const BACKENDS = ["sqlite", "supabase", "slack"];
+
 export function backendFromEnv(env = process.env) {
   const forced = (env.AGENT_BRIDGE_BACKEND || "").trim().toLowerCase();
-  if (forced && forced !== "sqlite" && forced !== "supabase") {
-    throw new BridgeError(`AGENT_BRIDGE_BACKEND must be "sqlite" or "supabase", got "${forced}".`);
+  if (forced && !BACKENDS.includes(forced)) {
+    throw new BridgeError(`AGENT_BRIDGE_BACKEND must be one of ${BACKENDS.join(", ")}, got "${forced}".`);
   }
-  return forced || (env.SUPABASE_URL ? "supabase" : "sqlite");
+  if (forced) return forced;
+  if (env.SUPABASE_URL) return "supabase";
+  if (env.SLACK_CHANNEL_ID) return "slack";
+  return "sqlite";
 }
 
-export function readToken(env = process.env) {
-  if (env.AGENT_BRIDGE_TOKEN && env.AGENT_BRIDGE_TOKEN.trim()) return env.AGENT_BRIDGE_TOKEN.trim();
-  if (env.AGENT_BRIDGE_TOKEN_FILE) {
-    const p = expandHome(env.AGENT_BRIDGE_TOKEN_FILE.trim());
+// A secret from VAR, or from the file named in VAR_FILE (preferred: keeps it out of configs).
+export function readSecret(env, name) {
+  if (env[name] && env[name].trim()) return env[name].trim();
+  const file = env[`${name}_FILE`];
+  if (file) {
+    const p = expandHome(file.trim());
     try {
       return readFileSync(p, "utf8").trim();
     } catch (e) {
-      throw new BridgeError(`Can't read AGENT_BRIDGE_TOKEN_FILE ${p}: ${e.code || e.message}`);
+      throw new BridgeError(`Can't read ${name}_FILE ${p}: ${e.code || e.message}`);
     }
   }
   return null;
 }
+
+export const readToken = (env = process.env) => readSecret(env, "AGENT_BRIDGE_TOKEN");
 
 const intEnv = (v) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
@@ -50,6 +61,15 @@ export async function createStore({ env = process.env, agentName = env.AGENT_NAM
       url: env.SUPABASE_URL,
       key: env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY,
       token: readToken(env),
+    });
+  }
+  if (backend === "slack") {
+    const { SlackStore } = await import("./stores/slack.js");
+    return new SlackStore({
+      apiUrl: env.SLACK_API_URL || undefined,
+      token: readSecret(env, "SLACK_BOT_TOKEN"),
+      channel: env.SLACK_CHANNEL_ID,
+      lookbackHours: intEnv(env.AGENT_BRIDGE_LOOKBACK_HOURS),
     });
   }
   const name = (agentName || "").trim();

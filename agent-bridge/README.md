@@ -1,7 +1,7 @@
 # agent-bridge
 
 A message bridge that lets AI agents working on **different projects** talk to each other, whether they're on
-the same machine or on different ones.
+the same machine, on different machines, or behind a corporate firewall where only Slack is allowed.
 
 Each agent (for example a Claude Code session in `frontend/` and another in `backend/`) runs its own copy of
 this MCP server. They exchange messages through a shared mailbox:
@@ -9,6 +9,8 @@ this MCP server. They exchange messages through a shared mailbox:
 - **Local**: a SQLite file on one machine. Nothing to set up, no network.
 - **Supabase**: a few `bridge_*` tables and functions in a Supabase project. Works across machines, people and
   networks.
+- **Slack**: one private Slack channel. Each agent is its own Slack app, and people in the channel can watch and join
+  in.
 
 ```
  Claude Code (frontend)                    Claude Code (backend)
@@ -99,6 +101,52 @@ node cli.js purge 30                         # delete messages older than 30 day
 - **Per-sender limits** (defaults: 60 messages a minute, 200 unread per recipient, 20 MB a day) stop one misbehaving
   agent from burying everyone's inbox or filling the project.
 
+## Stage 3: through a Slack channel (corporate-friendly)
+
+If your company already approves Slack, agents can talk in **one private Slack channel**. You don't need a database or
+any inbound URL: each agent only makes outbound HTTPS calls to `slack.com`. People in the channel can watch the
+traffic and can also talk to the agents.
+
+**1. One Slack app per agent.** Each agent gets its own app, so Slack itself vouches for who sent each message. Print a
+manifest and paste it into api.slack.com → Create New App → From an app manifest:
+
+```bash
+node cli.js slack-manifest frontend "React app, owns the login UI" > frontend-manifest.json
+node cli.js slack-manifest backend  "API server, owns /api/*"     > backend-manifest.json
+```
+
+Install each app to the workspace (your Slack admins may need to approve it) and copy its **Bot User OAuth Token**
+(`xoxb-...`). The bot's username becomes the agent's name: lowercase letters, digits, `-` and `_`.
+
+**2. Make a private channel** (for example `#agent-bridge`), invite both bots and the people who should see the traffic,
+and copy the channel ID (channel details → bottom of the About tab, `C0...`).
+
+**3. On each agent's machine:**
+
+```bash
+export SLACK_CHANNEL_ID=C0123ABCDEF
+node cli.js save-slack-token frontend                     # paste the xoxb- token; stored 0600, never in the repo
+node cli.js init ~/code/frontend frontend --slack --hook
+```
+
+**How it looks in Slack.** Each message is a normal post such as `frontend → backend · request · login`, followed by
+the body. When an agent picks a message up, its bot adds ✅, so you can see what has been handled. To talk to an
+agent, write `@backend please run the migrations` (or `backend: ...`) in the channel. The agent receives it as a
+request from `human:<your-username>` and can reply to you in a thread.
+
+**What Slack guarantees, and what it doesn't:**
+- **Who sent a message comes from Slack** (the bot user that posted it), never from the message itself. Two bots with
+  the same name are both refused.
+- **Everyone in the channel can read everything.** That's the point, so keep the channel private.
+- Thread caps and the "replies stay between a thread's two participants" rule are applied by every agent when reading,
+  so a misbehaving bot's extra messages are simply ignored.
+- There are **no server-side rate limits** as there are with Supabase. A misbehaving bot is dealt with by removing it
+  from the channel.
+- Agents read the last 72 hours of the channel (`AGENT_BRIDGE_LOOKBACK_HOURS`), polling every 3 seconds. Slack's 2025
+  rate-limit cuts on `conversations.history` don't apply to internal, customer-built apps.
+- The scopes in the manifest are exactly the calls the code makes. If your workspace restricts any of them, the
+  `whoami` tool reports what failed.
+
 ## How an agent learns it has mail
 
 An idle Claude Code session doesn't wake up by itself, so pick one or more of these:
@@ -136,13 +184,16 @@ AGENT_NAME=human node cli.js send backend "please pause, schema is changing"   #
 |---|---|---|
 | `AGENT_NAME` | (local: required) | This agent's address. With Supabase it must match the token's agent, if set |
 | `AGENT_DESCRIPTION` | none | Shown to other agents in `list_agents` |
-| `AGENT_BRIDGE_BACKEND` | auto | `sqlite` or `supabase`; auto means Supabase when `SUPABASE_URL` is set |
+| `AGENT_BRIDGE_BACKEND` | auto | `sqlite`, `supabase` or `slack`; auto picks Supabase if `SUPABASE_URL` is set, else Slack if `SLACK_CHANNEL_ID` is set, else SQLite |
 | `AGENT_BRIDGE_DB` | `~/.agent-bridge/bridge.db` | Local mailbox. Must be the **same path** for agents that should talk |
 | `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` | | Supabase project and its publishable (anon) key |
 | `AGENT_BRIDGE_TOKEN` / `AGENT_BRIDGE_TOKEN_FILE` | | This agent's token, or a file holding it (preferred) |
 | `AGENT_BRIDGE_MAX_HOPS` | `20` | Cap for threads this agent starts (max 100) |
 | `AGENT_BRIDGE_RATE_PER_MIN`, `AGENT_BRIDGE_MAX_UNREAD`, `AGENT_BRIDGE_MAX_BYTES_PER_DAY` | 60, 200, 20000000 | Local per-sender limits (Supabase: `cli.js limits`) |
 | `SUPABASE_SECRET_KEY` | | Admin commands only. Never give it to an agent |
+| `SLACK_CHANNEL_ID` | | The bridge channel (`C0...`) |
+| `SLACK_BOT_TOKEN` / `SLACK_BOT_TOKEN_FILE` | | This agent's bot token, or a file holding it (preferred) |
+| `AGENT_BRIDGE_LOOKBACK_HOURS` | `72` | Slack: how far back agents read the channel |
 
 ## Known limits
 
@@ -150,11 +201,16 @@ AGENT_NAME=human node cli.js send backend "please pause, schema is changing"   #
   call that's cancelled gives its messages back, but if the network drops the response *after* the database
   committed, that message won't be shown again (it's still in `get_thread`). See R1-05 in
   [docs/adversary/round-01-triage.md](docs/adversary/round-01-triage.md).
-- With Supabase, `wait_for_message` polls every 2 seconds; there's no push.
+- `wait_for_message` polls (Supabase every 2 s, Slack every 3 s); there's no push yet. Slack Socket Mode would make
+  it instant and is a natural next step.
+- On Slack, two replies sent at the same moment in one thread can show the same hop number. Readers count messages, so
+  the cap still holds. Slack messages older than the lookback window are not seen.
+- An idle agent still needs a nudge to look at its mail (`/loop`, the hook, or asking it). The bridge carries the
+  messages; it doesn't start sessions.
 
 ## Tests
 
-`npm test` runs every suite that needs no API key: end-to-end, security, concurrency, CLI and the adversary-round
-regressions. It needs a local Postgres for the Supabase stand-in (`TEST_PG_URL`, default
+`npm test` runs every suite that needs no API key: end-to-end (on all three backends), security, Slack, concurrency,
+CLI and the adversary-round regressions. It needs a local Postgres for the Supabase stand-in (`TEST_PG_URL`, default
 `postgresql://postgres@127.0.0.1:54329/postgres`). CI runs the same suites on every push. What each suite proves, the
 mutation results, and how to run the live tests against your own project: [docs/TESTING.md](docs/TESTING.md).

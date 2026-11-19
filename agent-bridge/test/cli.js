@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { sqliteBackend, supabaseLocalBackend } from "./backends.js";
+import { slackLocalBackend, sqliteBackend, supabaseLocalBackend } from "./backends.js";
 import { runCli, summary, test } from "./harness.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -238,6 +238,63 @@ try {
   });
 
   await sb.cleanup();
+
+  console.log("\n=== cli: slack (fake Slack API) ===");
+  const sl = await slackLocalBackend();
+  for (const a of ["web", "api"]) await sl.addAgent(a);
+  const slackEnv = { HOME, SLACK_CHANNEL_ID: sl.slack.channel.id, SLACK_API_URL: sl.slack.url };
+  const slackTok = (n) => join(HOME, ".agent-bridge", "tokens", `${n}.slack-token`);
+
+  await test("slack-manifest prints a valid manifest with exactly the scopes the code uses", async () => {
+    const r = await runCli(["slack-manifest", "web", "React app"], { HOME });
+    assert.equal(r.code, 0, r.err);
+    const m = JSON.parse(r.out);
+    assert.equal(m.features.bot_user.display_name, "web");
+    assert.deepEqual(m.oauth_config.scopes.bot.sort(), [
+      "channels:history", "channels:read", "chat:write", "groups:history", "groups:read",
+      "metadata.message:read", "reactions:read", "reactions:write", "users:read",
+    ]);
+    assert.notEqual((await runCli(["slack-manifest", "Bad Name"], { HOME })).code, 0);
+  });
+
+  await test("save-slack-token stores the bot token 0600 and rejects anything else", async () => {
+    for (const a of ["web", "api"]) {
+      const r = await runCli(["save-slack-token", a], { HOME }, { input: sl.tokens[a] + "\n" });
+      assert.equal(r.code, 0, r.err);
+      assert.equal(statSync(slackTok(a)).mode & 0o777, 0o600);
+    }
+    const bad = await runCli(["save-slack-token", "web2"], { HOME }, { input: "xoxp-user-token-not-a-bot\n" });
+    assert.notEqual(bad.code, 0);
+    assert.ok(!existsSync(slackTok("web2")));
+  });
+
+  await test("init --slack refuses without a channel or token file, and keeps the token out of the repo", async () => {
+    assert.match((await runCli(["init", repo("sl-x"), "web", "--slack"], { HOME })).err, /SLACK_CHANNEL_ID/);
+    assert.match((await runCli(["init", repo("sl-x"), "nobody", "--slack"], slackEnv)).err, /no Slack token file/);
+    assert.match((await runCli(["init", repo("sl-x"), "web", "--slack", "--supabase"], slackEnv)).err, /choose one/);
+    for (const a of ["web", "api"]) {
+      const r = repo(`sl-${a}`);
+      const res = await runCli(["init", r, a, "--slack", "--hook"], slackEnv);
+      assert.equal(res.code, 0, res.err);
+      for (const f of [".mcp.json", ".claude/settings.local.json"]) {
+        assert.ok(!readFileSync(join(r, f), "utf8").includes(sl.tokens[a]), `bot token leaked into ${f}`);
+      }
+    }
+  });
+
+  await test("two repos talk through the Slack channel from generated configs; the hook sees Slack mail", async () => {
+    const w = await connectFromMcpJson(repo("sl-web"));
+    const a = await connectFromMcpJson(repo("sl-api"));
+    assert.match(await w.call("whoami"), /"agent": "web"/);
+    assert.match(await w.call("send_message", { to: "api", body: "is /v2 live?" }), /Sent message/);
+    assert.match(await runHook(repo("sl-api")), /1 from web/);
+    assert.match(await a.call("check_inbox"), /is \/v2 live\?/);
+    assert.equal((await runHook(repo("sl-api"))).trim(), "");
+    await w.close();
+    await a.close();
+  });
+
+  await sl.cleanup();
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

@@ -1,9 +1,9 @@
 name: agent-bridge
 
-# Every agent-bridge suite that needs no API key and no real Supabase project:
+# Every agent-bridge suite that needs no API key, no real Supabase project and no real Slack workspace:
 # end-to-end (SQLite + Supabase stand-in), security, concurrency, CLI, and the adversary-round regressions.
 # The Supabase stand-in is a real Postgres (below) with Supabase's roles and grants, behind a small
-# PostgREST look-alike (test/fake-postgrest.js). Live runs against a real project (npm run test:live)
+# PostgREST look-alike (test/fake-postgrest.js); Slack is test/fake-slack.js. Live runs (npm run test:live)
 # need the project's keys and stay manual. Mutation testing (npm run test:mutations) is slow and manual.
 
 on:
@@ -47,12 +47,14 @@ jobs:
           cache-dependency-path: agent-bridge/package-lock.json
       - run: node --version
       - run: npm ci
-      - name: End-to-end (SQLite + Supabase stand-in)
-        run: node test/e2e.js sqlite supabase-local
+      - name: End-to-end (SQLite, Supabase stand-in, Slack stand-in)
+        run: node test/e2e.js sqlite supabase-local slack-local
       - name: Security (raw HTTP attacks with the publishable key)
         run: node test/security.js supabase-local
+      - name: Slack (identity, hostile channel members, people addressing agents)
+        run: node test/slack.js
       - name: Concurrency (separate processes)
-        run: node test/concurrency.js sqlite supabase-local
+        run: node test/concurrency.js sqlite supabase-local slack-local
       - name: CLI (init, hook, admin commands)
         run: node test/cli.js
       - name: Adversary round 1 regressions

@@ -1,11 +1,15 @@
 # Testing: every suite, what it proves, and what needs real credentials
 
-`npm test` runs every suite that needs **no API key and no real Supabase project**. CI runs the same suites on each push
+`npm test` runs every suite that needs **no API key, no real Supabase project and no real Slack workspace**. CI runs the same suites on each push
 ([`.github/workflows/agent-bridge.yml`](../../.github/workflows/agent-bridge.yml)). The Supabase stand-in is a real
 Postgres set up with Supabase's roles and default grants ([`test/supabase-roles.sql`](../test/supabase-roles.sql), UTF8
 like Supabase), behind [`test/fake-postgrest.js`](../test/fake-postgrest.js). That file is a small look-alike of
 Supabase's REST layer with the behaviour the client depends on: `apikey` → role, named-argument RPC, 204 for `void`, the
 SQLSTATE → HTTP status mapping, `PGRST202`, and "Invalid JWT" for a new-style key sent as a Bearer token.
+The Slack stand-in, [`test/fake-slack.js`](../test/fake-slack.js), does the same for the Slack Web API calls the backend makes:
+bot-token auth (`invalid_auth` with HTTP 200), `not_in_channel`, metadata returned only with `include_all_metadata`,
+newest-first history with cursors, reactions on messages, `already_reacted`, the 40,000-character text limit, display-name
+overrides that don't change the posting user, and 429 with `Retry-After`.
 
 ```bash
 npm install
@@ -18,10 +22,11 @@ npm run test:live             # your real Supabase project (needs keys, see belo
 
 | Suite | Backends | What it proves |
 |---|---|---|
-| `test/e2e.js` | sqlite, supabase-local, supabase-live | Real MCP server processes holding real conversations: each tool, blocking waits (also filtered by thread), peek vs read, bodies with Unicode/quotes/SQL/markdown/CRLF arriving byte for byte, thread privacy, loop cap, every input error reported (not a crash), max-length bodies, restart persistence, two sessions as the same agent never getting the same message, refusal to start with missing config, a bad token, a name/token mismatch or an unreachable URL |
+| `test/e2e.js` | sqlite, supabase-local, slack-local, supabase-live | Real MCP server processes holding real conversations: each tool, blocking waits (also filtered by thread), peek vs read, bodies with Unicode/quotes/SQL/markdown/CRLF arriving byte for byte, thread privacy, loop cap, every input error reported (not a crash), max-length bodies, restart persistence, two sessions as the same agent never getting the same message, refusal to start with missing config, a bad token, a name/token mismatch or an unreachable URL |
 | `test/security.js` | supabase-local, supabase-live | Raw HTTP with only the publishable key and/or one agent's token: tables unreadable and unwritable, admin functions and internal helpers refused, every function rejecting missing/short/long/wrong tokens, no sender spoofing, no reading/consuming/injecting into others' threads, the hop cap not liftable, oversized input refused by the database itself, token rotation and revocation, name validation, tokens stored only as hashes, no table privileges for `anon` at the SQL level |
-| `test/concurrency.js` | sqlite, supabase-local, supabase-live | Separate OS processes with a start barrier: 12 agents starting at once on a new mailbox, 96 parallel sends in one thread getting unique gap-free hop numbers, 4 readers on one inbox each message delivered exactly once (and the readers really overlapping), a mixed send/read storm |
-| `test/cli.js` | sqlite, supabase-local | `init` (merge, idempotent, upgrading a stage-1 hook), the hook run through a real shell, `peek` silent and exit 0 when Supabase is unreachable, admin commands, token files 0600, the token never in the repo, two "machines" talking from generated configs |
+| `test/slack.js` | slack-local | The sender is the Slack user who posted (not metadata, not a display name); malformed or out-of-policy metadata ignored; replies past the thread's starting cap or from outsiders dropped by readers; `<!channel>`, mentions and links escaped so a body can't ping anyone; people addressing agents by mention, `@name` or `name:`; agents answering people with a real mention; bots can't pose as people; a person named like an agent stays a person; duplicate bot names trusted by no one; the lookback window; bots outside the channel or with invalid names refused at start; 429s on reads waited out; sends never retried; no redirects; ✅ claims visible and given back on cancel; no forged headers through MCP |
+| `test/concurrency.js` | sqlite, supabase-local, slack-local, supabase-live | Separate OS processes with a start barrier: 12 agents starting at once on a new mailbox, 96 parallel sends in one thread getting unique gap-free hop numbers, 4 readers on one inbox each message delivered exactly once (and the readers really overlapping), a mixed send/read storm |
+| `test/cli.js` | sqlite, supabase-local, slack-local | `init` (merge, idempotent, upgrading a stage-1 hook), the hook run through a real shell, `peek` silent and exit 0 when Supabase is unreachable, admin commands, token files 0600, the token never in the repo, two "machines" talking from generated configs; `slack-manifest` (exactly the scopes the code uses), `save-slack-token`, `init --slack`, two repos talking through the Slack channel with the hook seeing Slack mail |
 | `test/regressions-r1.js` | sqlite, supabase-local, cli | One or more tests per finding of [adversary round 1](adversary/round-01-triage.md). **0/26 on the attacked code, 29/29 now** |
 | `test/mutations.js` | (runs the suites above) | Removes one guard at a time and checks that some suite fails; see [Mutation testing](#mutation-testing) |
 
@@ -84,15 +89,27 @@ Adapted from the dev-workflow rules in the reference repo:
 | R1-14 init writes through symlinks | killed | R1-14 init refuses to write through a symlink |
 | R1-06 hook values double-quoted | killed | R1-06 the hook command doesn't expand $() or backticks from paths |
 | R1-15 sequence privileges kept | killed | R1-15 API roles have no privileges on the message id sequence |
+| SL sender taken from metadata | killed | the sender is the Slack user who posted, whatever the metadata or display name say |
+| SL out-of-policy hop/cap accepted | killed | malformed or out-of-policy metadata is ignored |
+| SL outsiders accepted into a thread | killed | a reply can't exceed the cap its thread started with, or include outsiders |
+| SL thread cap not enforced by readers | killed | a reply can't exceed the cap its thread started with, or include outsiders |
+| SL body not escaped | killed | bodies can't ping the channel or anyone |
+| SL bots can pose as people (both guards) | killed | a bot can't pose as a person |
+| SL duplicate bot names trusted | killed | two bots with the same name: neither is trusted, and the agent won't start |
+| SL already_reacted treated as our claim | killed | 4 processes reading ONE inbox at once: every message delivered exactly once |
+| SL lookback window ignored | killed | messages older than the lookback window are ignored |
+| SL 429 on reads not waited out | killed | Slack rate limits (429) on reads are waited out |
+| SL sends retried | killed | sends are never retried (no double posts), even on a 429 |
+| SL token follows redirects | killed | the bot token never follows a redirect |
 
-**37 of 37 killed.** The full run killed 35. The two survivors were weak tests, not missing guards:
+**49 of 49 killed** (37 for SQLite/Supabase, 12 for Slack). The first full run of the first 37 killed 35. The two survivors were weak tests, not missing guards:
 - The startup-lock test had become timing-dependent once the constructor did more file work before opening the database. It now
   waits at a barrier *before* opening, over three rounds.
 - The sender-filter test ran after another test had already emptied the inbox, so the filter had nothing to filter out. It now
   leaves other unread mail in place and checks that mail is still unread.
 
 Both were re-run with `node test/mutations.js "busy timeout set after WAL" "sender filter ignored"`: 2/2 killed.
-For R1-05 and R1-13, two independent guards each prevent the failure, so those mutations remove both guards at once.
+For R1-05, R1-13 and "bots can pose as people", two independent guards each prevent the failure, so those mutations remove both guards at once. The Slack mutations were run with `node test/mutations.js "SL "`: 12/12 killed, after making the bots-as-people mutation remove both of its guards (it survived with only one removed, which is how the second guard was noticed).
 
 ## Mistakes caught, and made only once
 

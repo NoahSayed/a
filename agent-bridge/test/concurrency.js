@@ -31,18 +31,19 @@ for (const make of await backendsFromArgs()) {
   let restoreLimits = null;
   try {
     if (!b.remote) {
-      await test("12 agents starting at the same instant on a brand-new database", async () => {
+      await test("16 agents starting at the same instant on a brand-new database (8 rounds)", async () => {
         const env = b.envFor("ping");
-        const names = Array.from({ length: 12 }, (_, i) => `starter${i}`);
-        for (let round = 0; round < 3; round++) {
+        // The race is probabilistic, so race many times: 16 processes x 8 fresh mailboxes.
+        const names = Array.from({ length: 16 }, (_, i) => `starter${i}`);
+        for (let round = 0; round < 8; round++) {
           const fresh = { ...env, AGENT_BRIDGE_DB: env.AGENT_BRIDGE_DB.replace(/bridge\.db$/, `fresh-start-${round}.db`) };
-          const openAt = Date.now() + 1500; // every process opens the brand-new mailbox at the same moment
+          const openAt = Date.now() + 1200; // every process opens the brand-new mailbox at the same moment
           const res = await Promise.all(
             names.map((n, i) =>
               worker({ ...fresh, AGENT_NAME: n }, "send", { to: names[(i + 1) % names.length], body: `hi from ${n}`, openAt })
             )
           );
-          assert.equal(res.flat().length, 12, `round ${round}`);
+          assert.equal(res.flat().length, 16, `round ${round}`);
         }
       });
     }
@@ -53,7 +54,9 @@ for (const make of await backendsFromArgs()) {
 
     // the server caps a thread at 100 messages: seed + WORKERS * perThread must stay <= 100
     const perThread = Math.min(PER_WORKER, Math.floor(99 / WORKERS));
-    await test(`${WORKERS * perThread} concurrent sends into ONE thread get unique, gap-free hops`, async () => {
+    // Slack has no lock, so parallel replies can share a hop number (readers count messages instead;
+    // see test/slack.js). Exactly-once delivery below still has to hold on Slack.
+    if (b.kind !== "slack") await test(`${WORKERS * perThread} concurrent sends into ONE thread get unique, gap-free hops`, async () => {
       const [seed] = await worker(b.envFor("ping"), "send", { to: N("pong"), body: "seed", maxHops: 100 });
       assert.ok(seed?.thread_id, "seed message has no thread_id");
       const barrier = Date.now() + 1500;

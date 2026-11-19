@@ -23,6 +23,21 @@ process.emitWarning = (warning, ...args) => {
 };
 const { DatabaseSync } = await import("node:sqlite");
 
+// The constructor is synchronous, so back off with a blocking sleep.
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function retryWhileBusy(budgetMs, fn) {
+  const deadline = Date.now() + Math.max(budgetMs, 0);
+  for (let delay = 5; ; delay = Math.min(delay * 2, 200)) {
+    try {
+      return fn();
+    } catch (e) {
+      const busy = /database is locked|SQLITE_BUSY/i.test(String(e.message)) || e.errcode === 5;
+      if (!busy || Date.now() >= deadline) throw e;
+      sleepSync(delay + Math.floor(Math.random() * delay));
+    }
+  }
+}
+
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 
@@ -51,7 +66,14 @@ export class SqliteStore {
     // SQLite creates -wal/-shm with the main file's permissions.
     this.db = new DatabaseSync(dbPath, { timeout: busyTimeoutMs });
     this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(busyTimeoutMs))}`);
-    this.db.exec("PRAGMA journal_mode = WAL");
+    // Switching a new database to WAL needs an exclusive lock, and SQLite can answer BUSY at
+    // once (without calling the busy handler) when several processes do it together. Skip it
+    // if another process already did, otherwise retry with a short backoff.
+    retryWhileBusy(busyTimeoutMs, () => {
+      if (this.db.prepare("PRAGMA journal_mode").get().journal_mode !== "wal") {
+        this.db.exec("PRAGMA journal_mode = WAL");
+      }
+    });
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agents (
         name        TEXT PRIMARY KEY,

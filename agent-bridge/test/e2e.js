@@ -36,14 +36,14 @@ for (const make of await backendsFromArgs()) {
       const me = JSON.parse((await fe.call("whoami")).text);
       assert.equal(me.agent, N("frontend"));
       assert.equal(me.unread, 0);
-      assert.match(me.backend, b.remote ? /^supabase:/ : /^sqlite:/);
+      assert.match(me.backend, new RegExp(`^${b.kind}:`));
     });
 
     await test("list_agents shows all connected agents with project dir", async () => {
       const agents = JSON.parse((await fe.call("list_agents")).text);
       const names = agents.map((a) => a.name);
       for (const a of ["frontend", "backend", "outsider"]) assert.ok(names.includes(N(a)), `missing ${a}`);
-      assert.ok(agents.find((a) => a.name === N("frontend")).project_dir, "project_dir not recorded");
+      if (b.hasProjectDir) assert.ok(agents.find((a) => a.name === N("frontend")).project_dir, "project_dir not recorded");
     });
 
     await test("blocking wait wakes when the other agent sends", async () => {
@@ -145,16 +145,16 @@ for (const make of await backendsFromArgs()) {
       assert.equal(JSON.parse((await fe.call("whoami")).text).agent, N("frontend"));
     });
 
-    await test("max-length body (50,000 chars) is accepted", async () => {
-      const r = await fe.call("send_message", { to: N("backend"), body: "y".repeat(50000), type: "fyi" });
+    await test(`max-length body (${b.maxBody} chars) is accepted`, async () => {
+      const r = await fe.call("send_message", { to: N("backend"), body: "y".repeat(b.maxBody), type: "fyi" });
       assert.equal(r.isError, false, r.text);
       const got = await be.call("check_inbox");
-      assert.ok(got.text.includes("y".repeat(50000)));
+      assert.ok(got.text.includes("y".repeat(b.maxBody)));
     });
 
-    await test("unknown recipient: " + (b.remote ? "rejected (agents must be registered)" : "queued with a note"), async () => {
+    await test("unknown recipient: " + (b.registered ? "rejected (agents must be registered)" : "queued with a note"), async () => {
       const r = await fe.call("send_message", { to: N("nobody"), body: "hello?" });
-      if (b.remote) {
+      if (b.registered) {
         assert.equal(r.isError, true);
         assert.match(r.text, /Unknown agent/);
       } else {
@@ -194,7 +194,7 @@ for (const make of await backendsFromArgs()) {
     await test("server refuses to start with missing config", async () => {
       const env = b.envFor("frontend");
       if (b.remote) {
-        delete env.AGENT_BRIDGE_TOKEN;
+        delete env[b.tokenVar];
         const r = await runServerExpectExit(env);
         assert.notEqual(r.code, 0);
         assert.match(r.stderr, /No agent token/);
@@ -208,7 +208,7 @@ for (const make of await backendsFromArgs()) {
 
     if (b.remote) {
       await test("server refuses a bad token", async () => {
-        const r = await runServerExpectExit({ ...b.envFor("frontend"), AGENT_BRIDGE_TOKEN: "abt_" + "0".repeat(64) });
+        const r = await runServerExpectExit({ ...b.envFor("frontend"), [b.tokenVar]: b.badToken });
         assert.notEqual(r.code, 0);
         assert.match(r.stderr, /invalid agent token/);
       });
@@ -219,10 +219,10 @@ for (const make of await backendsFromArgs()) {
         assert.match(r.stderr, /token belongs to agent/);
       });
 
-      await test("server refuses an unreachable Supabase URL", async () => {
-        const r = await runServerExpectExit({ ...b.envFor("frontend"), SUPABASE_URL: "http://127.0.0.1:1" });
+      await test("server refuses an unreachable service URL", async () => {
+        const r = await runServerExpectExit({ ...b.envFor("frontend"), [b.urlVar]: "http://127.0.0.1:1" });
         assert.notEqual(r.code, 0);
-        assert.match(r.stderr, /Can't reach Supabase/);
+        assert.match(r.stderr, /Can't reach/);
       });
     }
 

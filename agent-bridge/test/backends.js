@@ -18,7 +18,11 @@ export async function sqliteBackend() {
   let limitEnv = {};
   return {
     name: "sqlite",
+    kind: "sqlite",
     remote: false,
+    registered: false, // unknown recipients are queued, not refused
+    maxBody: 50000,
+    hasProjectDir: true,
     nameOf: (a) => a,
     envFor: (agent) => ({ AGENT_BRIDGE_BACKEND: "sqlite", AGENT_NAME: agent, AGENT_BRIDGE_DB: db, ...limitEnv }),
     addAgent: async () => {},
@@ -40,7 +44,14 @@ function supabaseCommon({ name, url, publishable, admin, suffix }) {
   const nameOf = (a) => `${a}${suffix}`;
   return {
     name,
+    kind: "supabase",
     remote: true,
+    registered: true,
+    maxBody: 50000,
+    hasProjectDir: true,
+    tokenVar: "AGENT_BRIDGE_TOKEN",
+    urlVar: "SUPABASE_URL",
+    badToken: "abt_" + "0".repeat(64),
     url,
     publishable,
     admin,
@@ -117,9 +128,51 @@ export async function supabaseLiveBackend() {
   return b;
 }
 
+export async function slackLocalBackend() {
+  const { startFakeSlack } = await import("./fake-slack.js");
+  const slack = await startFakeSlack();
+  const tokens = {};
+  const users = {};
+  return {
+    name: "slack-local",
+    kind: "slack",
+    remote: true,
+    registered: true,
+    maxBody: 30000,
+    hasProjectDir: false,
+    tokenVar: "SLACK_BOT_TOKEN",
+    urlVar: "SLACK_API_URL",
+    badToken: "xoxb-not-a-real-token",
+    slack,
+    tokens,
+    users,
+    nameOf: (a) => a,
+    envFor: (agent) => ({
+      AGENT_BRIDGE_BACKEND: "slack",
+      SLACK_API_URL: slack.url,
+      SLACK_CHANNEL_ID: slack.channel.id,
+      SLACK_BOT_TOKEN: tokens[agent],
+      AGENT_NAME: agent,
+    }),
+    addAgent: async (agent) => {
+      const u = slack.addUser({ name: agent });
+      users[agent] = u;
+      tokens[agent] = u.token;
+    },
+    addHuman: (name) => slack.addUser({ name, isBot: false }),
+    setLimits: async () => async () => {}, // Slack has no server-side bridge limits
+    cleanup: () => slack.close(),
+  };
+}
+
 export async function backendsFromArgs(argv = process.argv.slice(2)) {
   const wanted = argv.length ? argv : ["sqlite", "supabase-local"];
-  const make = { sqlite: sqliteBackend, "supabase-local": supabaseLocalBackend, "supabase-live": supabaseLiveBackend };
+  const make = {
+    sqlite: sqliteBackend,
+    "supabase-local": supabaseLocalBackend,
+    "supabase-live": supabaseLiveBackend,
+    "slack-local": slackLocalBackend,
+  };
   return wanted.map((w) => {
     if (!make[w]) throw new Error(`unknown backend ${w} (use: ${Object.keys(make).join(", ")})`);
     return make[w];

@@ -26,9 +26,14 @@ Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
                                        show or change the per-agent abuse limits
   purge [days=30]                      delete messages older than N days
   save-token <name>                    read a token from stdin into ~/.agent-bridge/tokens/<name>.token
+Slack (needs SLACK_CHANNEL_ID)
+  slack-manifest <name> ["desc"]       print a Slack app manifest for this agent (one app per agent)
+  save-slack-token <name>              read the app's bot token (xoxb-...) from stdin, store it 0600
+  init <repo> <name> --slack [--hook]  wire a repo to the Slack channel
 
 Environment: AGENT_BRIDGE_DB (local), SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY,
-AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE (Supabase). See README.md.`;
+AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE (Supabase), SLACK_CHANNEL_ID,
+SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_FILE (Slack). See README.md.`;
 
 const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
@@ -54,9 +59,9 @@ function refuseSymlink(p) {
   }
 }
 
+const slackTokenPath = (name) => expandHome(`~/.agent-bridge/tokens/${name}.slack-token`);
 const tokenPath = (name) => expandHome(`~/.agent-bridge/tokens/${name}.token`);
-function saveToken(name, token) {
-  const p = tokenPath(name);
+function saveToken(name, token, p = tokenPath(name)) {
   mkdirSync(expandHome("~/.agent-bridge/tokens"), { recursive: true, mode: 0o700 });
   writeFileSync(p, token + "\n", { mode: 0o600 });
   chmodSync(p, 0o600);
@@ -151,15 +156,27 @@ async function main() {
 
     case "init": {
       const [repo, name, ...descParts] = args;
-      if (!repo || !name) throw new Error('usage: init <repo-path> <agent-name> ["description"] [--hook] [--supabase]');
+      if (!repo || !name) throw new Error('usage: init <repo-path> <agent-name> ["description"] [--hook] [--supabase | --slack]');
       if (!AGENT_NAME_RE.test(name)) throw new Error("agent name: lowercase letters, digits, - and _ (max 40)");
       const repoDir = resolve(repo);
       if (!existsSync(repoDir)) throw new Error(`no such directory: ${repoDir}`);
       const supabase = flags.has("--supabase");
+      const slack = flags.has("--slack");
+      if (supabase && slack) throw new Error("choose one of --supabase or --slack");
       const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {});
 
       let env;
-      if (supabase) {
+      if (slack) {
+        const channel = process.env.SLACK_CHANNEL_ID;
+        if (!channel) throw new Error("--slack needs SLACK_CHANNEL_ID (the bridge channel's ID, like C0123ABCDEF) in your shell.");
+        const tf = expandHome(flagValue("--token-file") || slackTokenPath(name));
+        if (!existsSync(tf)) {
+          throw new Error(`no Slack token file at ${tf}. Save this agent's bot token with "save-slack-token ${name}", then re-run init.`);
+        }
+        // The bot token stays out of the repo: .mcp.json only points at the token file.
+        env = { AGENT_NAME: name, AGENT_BRIDGE_BACKEND: "slack", SLACK_CHANNEL_ID: channel, SLACK_BOT_TOKEN_FILE: tf };
+        if (process.env.SLACK_API_URL) env.SLACK_API_URL = process.env.SLACK_API_URL;
+      } else if (supabase) {
         const url = process.env.SUPABASE_URL;
         const key = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
         if (!url || !key) throw new Error("--supabase needs SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in your shell.");
@@ -195,7 +212,7 @@ async function main() {
       else if (prevDesc) env.AGENT_DESCRIPTION = prevDesc;
       mcp.mcpServers.bridge = { command: process.execPath, args: [join(HERE, "server.js")], env };
       writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + "\n");
-      console.log(`wrote ${mcpPath}  (agent "${name}", ${supabase ? "supabase" : "local " + env.AGENT_BRIDGE_DB})`);
+      console.log(`wrote ${mcpPath}  (agent "${name}", ${slack ? "slack " + env.SLACK_CHANNEL_ID : supabase ? "supabase" : "local " + env.AGENT_BRIDGE_DB})`);
 
       if (flags.has("--hook")) {
         const settingsPath = join(repoDir, ".claude", "settings.local.json");
@@ -274,6 +291,52 @@ async function main() {
       const days = Number(args[0] || 30);
       if (!(days >= 0)) throw new Error("usage: purge [days]");
       console.log(`deleted ${await (await admin()).purge(days)} message(s) older than ${days} day(s)`);
+      break;
+    }
+
+    case "save-slack-token": {
+      const [name] = args;
+      if (!name || !AGENT_NAME_RE.test(name)) throw new Error("usage: save-slack-token <name>  (paste the bot token, then Enter)");
+      let input = "";
+      for await (const chunk of process.stdin) {
+        input += chunk;
+        if (input.includes("\n")) break;
+      }
+      const token = input.trim();
+      if (!/^xoxb-[A-Za-z0-9-]{10,}$/.test(token)) throw new Error("that doesn't look like a Slack bot token (xoxb-...)");
+      console.log(`saved to ${saveToken(name, token, slackTokenPath(name))}`);
+      break;
+    }
+
+    case "slack-manifest": {
+      // One Slack app per agent: the app's bot user is the agent's identity on the bridge.
+      const [name, ...descParts] = args;
+      if (!name || !AGENT_NAME_RE.test(name)) throw new Error('usage: slack-manifest <name> ["description"]');
+      const manifest = {
+        display_information: {
+          name,
+          description: (descParts.join(" ") || `agent-bridge agent "${name}"`).slice(0, 139),
+        },
+        features: { bot_user: { display_name: name, always_online: true } },
+        oauth_config: {
+          scopes: {
+            // each scope is for a call stores/slack.js makes:
+            bot: [
+              "chat:write", // chat.postMessage
+              "channels:history", // conversations.history (public channel)
+              "groups:history", // conversations.history (private channel)
+              "channels:read", // conversations.members (public)
+              "groups:read", // conversations.members (private)
+              "users:read", // users.info: who posted
+              "reactions:write", // reactions.add/remove: claim a message
+              "reactions:read", // reading claims
+              "metadata.message:read", // message metadata in the channel
+            ],
+          },
+        },
+        settings: { org_deploy_enabled: false, socket_mode_enabled: false, token_rotation_enabled: false },
+      };
+      console.log(JSON.stringify(manifest, null, 2));
       break;
     }
 

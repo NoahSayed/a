@@ -30,17 +30,23 @@ export function validateAgentName(name, what = "agent name") {
   }
 }
 
-export function validateOutgoing({ from, to, body, type, subject, threadId }) {
+// Backends may use their own thread ids (Slack: message timestamps) and their own
+// recipient names (Slack: "human:<user>"), and may have a lower body limit.
+export function validateOutgoing({ from, to, body, type, subject, threadId }, {
+  isThreadId = isUuid,
+  validateRecipient = (t) => validateAgentName(t),
+  maxBody = LIMITS.body,
+} = {}) {
   if (!to || typeof to !== "string") throw new BridgeError("`to` is required.");
-  validateAgentName(to);
+  validateRecipient(to);
   if (from && to === from) throw new BridgeError("An agent cannot message itself.");
   if (!MESSAGE_TYPES.includes(type)) throw new BridgeError(`type must be one of ${MESSAGE_TYPES.join(", ")}`);
   if (typeof body !== "string" || body.length === 0) throw new BridgeError("body must be a non-empty string.");
-  if (charLength(body) > LIMITS.body) throw new BridgeError(`body is too long (max ${LIMITS.body} characters).`);
+  if (charLength(body) > maxBody) throw new BridgeError(`body is too long (max ${maxBody} characters).`);
   if (subject != null) {
     if (charLength(subject) > LIMITS.subject) throw new BridgeError(`subject is too long (max ${LIMITS.subject} characters).`);
     if (/[\r\n]/.test(subject)) throw new BridgeError("subject must be a single line.");
   }
-  if (threadId != null && !isUuid(threadId))
+  if (threadId != null && !isThreadId(threadId))
     throw new BridgeError(`Unknown thread_id ${threadId}. Omit it to start a new thread.`);
 }
