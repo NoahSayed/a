@@ -345,7 +345,7 @@ try {
     assert.match(down.out, /connection refused/);
   });
 
-  await test("a token pasted into the config (inline) is a WARN; a malformed one is a WARN about its format", async () => {
+  await test("a token pasted into the config (inline) is a WARN; a malformed one is a FAIL about its format (it would never be sent)", async () => {
     const env = SL();
     delete env.SLACK_BOT_TOKEN_FILE;
     const r = await doctor({ ...env, SLACK_BOT_TOKEN: bot.token });
@@ -353,7 +353,8 @@ try {
     assert.ok(has(r.out, "WARN", "Slack token"), r.out);
     noSecret(r, bot.token);
     const odd = await doctor(SL({ SLACK_BOT_TOKEN_FILE: sfile("not-a-slack-token-123456", 0o600, "odd") }));
-    assert.ok(has(odd.out, "WARN", "Slack token format"), odd.out);
+    assert.ok(has(odd.out, "FAIL", "Slack token format"), odd.out); // the server would refuse it (R2-11)
+    assert.equal(odd.code, 1);
   });
 } finally {
   if (secure) await new Promise((r) => (secure.closeAllConnections?.(), secure.close(r)));

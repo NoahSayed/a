@@ -13,6 +13,7 @@ const SLT = ["test/slack.js"];
 const DLP = ["test/dlp.js"];
 const PX = ["test/proxy.js"];
 const DOC = ["test/doctor.js"];
+const R2C = ["test/regressions-r2-client.js"];
 
 const MUTATIONS = [
   {
@@ -486,6 +487,70 @@ const MUTATIONS = [
     find: `        assertSecureUrl(env.SUPABASE_URL, "SUPABASE_URL");`, replace: ``, suite: DOC },
   { name: "HD doctor ignores a CA bundle that isn't a certificate", file: "doctor.js",
     find: `      if (/-----BEGIN CERTIFICATE-----/.test(pem))`, replace: `      if (true)`, suite: DOC },
+
+  // ---- round 2, client side (test/regressions-r2-client.js) ----
+  { name: "R2-06 de-dup drops the whole matcher group", file: "cli.js",
+    find: `          const kept = h.hooks.filter((x) => !ours.test(text(x)));
+          if (kept.length === h.hooks.length) return [h];
+          return kept.length ? [{ ...h, hooks: kept }] : [];`,
+    replace: `          if (!h.hooks.some((x) => ours.test(text(x)))) return [h];
+          return [];`, suite: R2C },
+  { name: "R2-06 de-dup loses the group's matcher", file: "cli.js",
+    find: `[{ ...h, hooks: kept }]`, replace: `[{ hooks: kept }]`, suite: R2C },
+  { name: "R2-07 scan page cap back to 20", file: SLACK,
+    find: `const DEFAULT_MAX_PAGES = 500;`, replace: `const DEFAULT_MAX_PAGES = 20;`, suite: R2C },
+  { name: "R2-07 a cut-short scan isn't reported", file: SLACK,
+    find: `    if (s.cut) {`, replace: `    if (false) {`, suite: R2C },
+  { name: "R2-07 a cut-short scan reports the window start, not the oldest message read", file: SLACK,
+    find: `const coveredSince = cut && raw.length ? parseFloat(raw[0].ts) : windowStart;`, replace: `const coveredSince = windowStart;`, suite: R2C },
+  { name: "R2-07 check_inbox says Inbox empty after an incomplete scan", file: "server.js",
+    find: "return text(warnings ? `No unread messages in the part of the channel that was scanned.${warnings}` : \"Inbox empty.\");",
+    replace: `return text("Inbox empty.");`, suite: R2C },
+  { name: "R2-07 whoami drops the scan warnings", file: SLACK,
+    find: `unread, ...(warnings.length ? { warnings } : {}) };`, replace: `unread };`, suite: R2C },
+  { name: "R2-07 the unread-mail hook hides scan warnings", file: "cli.js",
+    find: `for (const w of store.scanWarnings?.() ?? []) console.log(`, replace: `for (const w of []) console.log(`, suite: R2C },
+  { name: "R2-07 no per-sender rate limit on Slack", file: SLACK,
+    find: `if (window.length >= this.ratePerMinute) {`, replace: `if (false) {`, suite: R2C },
+  { name: "R2-07 no per-sender unread backlog limit on Slack", file: SLACK,
+    find: `if (toBotId && !claimedByRecipient && (unreadFrom.get(pairKey) || 0) >= this.maxUnreadPerSender) {`, replace: `if (false) {`, suite: R2C },
+  { name: "R2-07 claimed mail still counts toward the backlog", file: SLACK,
+    find: `const claimedByRecipient = !!toBotId && !!(m.reactions || []).find((r) => r.name === CLAIM)?.users?.includes(toBotId);`,
+    replace: `const claimedByRecipient = false;`, suite: R2C },
+  { name: "R2-07 replies to a thread that started outside the window vanish silently", file: SLACK,
+    find: `            info.outsideCoverage++;`, replace: `            ;`, suite: R2C },
+  { name: "R2-07 a 429 on history is given up after two retries", file: SLACK,
+    find: `{ retries: 4, maxWaitSec: 30 }`, replace: `{ retries: 2, maxWaitSec: 30 }`, suite: R2C },
+  { name: "R2-07 doctor doesn't scan the channel", file: "doctor.js",
+    find: `    await store.scan();
+    const s = store.lastScan;`, replace: `    const s = { messages: 0, pages: 0, coveredSince: 0 };`, suite: R2C },
+  { name: "R2-08 a username shared by two people is accepted as one human", file: SLACK,
+    find: `    if ((dir.humansByName.get(u.name) || []).length !== 1) return { ambiguousHuman: u.name };`, replace: ``, suite: R2C },
+  { name: "R2-08 an ambiguous sender is ignored without a word", file: SLACK,
+    find: `        bump(info.ambiguous, \`human:\${parsed.ambiguousHuman}\`);`, replace: ``, suite: R2C },
+  { name: "R2-11 the agent token's shape isn't checked", file: "store.js",
+    find: `readSecret(env, "AGENT_BRIDGE_TOKEN", { shape: TOKEN_SHAPES.AGENT_BRIDGE_TOKEN })`, replace: `readSecret(env, "AGENT_BRIDGE_TOKEN")`, suite: R2C },
+  { name: "R2-11 the Slack bot token's shape isn't checked", file: "store.js",
+    find: `readSecret(env, "SLACK_BOT_TOKEN", { shape: TOKEN_SHAPES.SLACK_BOT_TOKEN })`, replace: `readSecret(env, "SLACK_BOT_TOKEN")`, suite: R2C },
+  { name: "R2-11 a token file that others can read is used", file: "store.js",
+    find: `if (process.platform !== "win32" && st.mode & 0o007) {`, replace: `if (false) {`, suite: R2C },
+  { name: "R2-11 an oversized or non-regular token file is read", file: "store.js",
+    find: `if (!st.isFile() || st.size > TOKEN_FILE_MAX_BYTES) {`, replace: `if (false) {`, suite: R2C },
+  { name: "R2-11 doctor probes with a file that isn't a token", file: "doctor.js",
+    find: `    if (!shape.test(value)) {
+      // Neither the server`, replace: `    if (false) {
+      // Neither the server`, suite: R2C,
+    also: { find: `token: readSlackToken(env),`, replace: `token: readSecret(env, "SLACK_BOT_TOKEN"),` } },
+  { name: "R2-12 peek doesn't re-run itself with proxy and CA settings", file: "cli.js",
+    find: `if (Object.keys(startup).length && process.env[PEEK_REEXEC_GUARD] !== "1") {`, replace: `if (false) {`, suite: R2C },
+  { name: "R2-12 the exec-form hook leaves out proxy and CA settings", file: "cli.js",
+    find: `.filter(([k]) => PEEK_ENV_KEYS.has(k) || PEEK_PROCESS_KEYS.has(k))`, replace: `.filter(([k]) => PEEK_ENV_KEYS.has(k))`, suite: R2C },
+  { name: "R2-12 peek --set passes NODE_OPTIONS", file: "cli.js",
+    find: `  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, replace: `  "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, suite: R2C },
+  { name: "R2-12 peek --set passes the re-exec guard", file: "cli.js",
+    find: `  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, replace: `  "AGENT_BRIDGE_PEEK_REEXEC", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, suite: R2C },
+  { name: "R2-12 peek --set passes AGENT_BRIDGE_TOKEN", file: "cli.js",
+    find: `  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, replace: `  "AGENT_BRIDGE_TOKEN", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, suite: R2C },
 ];
 
 // Optional: node test/mutations.js "<part of a name>" ... runs only matching mutations.

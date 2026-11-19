@@ -62,6 +62,12 @@ async function deliver(rows, signal) {
   return rows;
 }
 
+// Warnings about the latest read of the backend (only Slack has any), as text to append to an answer.
+const scanWarningsText = () => {
+  const w = store.scanWarnings?.() ?? [];
+  return w.length ? `\n\n${w.map((x) => `WARNING: ${x}`).join("\n")}` : "";
+};
+
 const text = (s) => ({ content: [{ type: "text", text: s }] });
 const fail = (s) => ({ content: [{ type: "text", text: s }], isError: true });
 // Wrap a handler so any store/network error becomes a tool error instead of a crash.
@@ -157,10 +163,15 @@ server.registerTool(
     const claimed = await store.inbox({ limit, markRead: mark_read, fromAgent: from_agent ?? null });
     const rows = mark_read ? await deliver(claimed, extra?.signal) : claimed;
     if (!rows) return fail("Cancelled; the messages were left unread.");
-    if (!rows.length) return text("Inbox empty.");
+    // A backend that can't read everything (Slack: scan cut short, messages ignored) says so here, and
+    // "Inbox empty" is never claimed on the strength of an incomplete scan (R2-07).
+    const warnings = scanWarningsText();
+    if (!rows.length) {
+      return text(warnings ? `No unread messages in the part of the channel that was scanned.${warnings}` : "Inbox empty.");
+    }
     const { unread } = await store.whoami();
     const remaining = mark_read ? unread : unread - rows.length;
-    return text(rows.map(render).join("\n\n") + (remaining > 0 ? `\n\n(${remaining} more unread)` : ""));
+    return text(rows.map(render).join("\n\n") + (remaining > 0 ? `\n\n(${remaining} more unread)` : "") + warnings);
   })
 );
 
@@ -192,7 +203,7 @@ server.registerTool(
           if (extra?.signal?.aborted) return fail("Cancelled; the messages were left unread.");
           const rows = await deliver(await store.inbox({ ...filter, markRead: true }), extra?.signal);
           if (!rows) return fail("Cancelled; the messages were left unread.");
-          if (rows.length) return text(rows.map(render).join("\n\n"));
+          if (rows.length) return text(rows.map(render).join("\n\n") + scanWarningsText());
         }
         lastError = null;
       } catch (e) {
@@ -202,7 +213,7 @@ server.registerTool(
       await sleep(Math.min(store.pollIntervalMs, Math.max(0, deadline - Date.now())));
     }
     const why = lastError ? ` (last error: ${lastError.message})` : "";
-    return text(`No message after ${timeout_seconds}s${why}. You can wait again or carry on and check_inbox later.`);
+    return text(`No message after ${timeout_seconds}s${why}. You can wait again or carry on and check_inbox later.${scanWarningsText()}`);
   })
 );
 

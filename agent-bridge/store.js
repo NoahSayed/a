@@ -9,7 +9,7 @@
 // AGENT_BRIDGE_BACKEND=sqlite|supabase|relay|slack forces one; otherwise SUPABASE_URL selects
 // Supabase, then RELAY_URL the relay, then SLACK_CHANNEL_ID selects Slack, else SQLite.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { BridgeError } from "./stores/common.js";
@@ -38,22 +38,59 @@ export function backendFromEnv(env = process.env) {
   return "sqlite";
 }
 
+// The only shapes a token may have. A file named by AGENT_BRIDGE_TOKEN_FILE / SLACK_BOT_TOKEN_FILE is
+// sent to the configured URL, so anything that is not a token is refused before any network call
+// (R2-11): a poisoned .mcp.json must not turn the server into a way to ship arbitrary files out.
+export const TOKEN_SHAPES = {
+  AGENT_BRIDGE_TOKEN: { re: /^abt_[0-9a-f]{64}$/, what: "an agent-bridge token (abt_ + 64 hex characters)" },
+  SLACK_BOT_TOKEN: { re: /^xoxb-[A-Za-z0-9-]+$/, what: "a Slack bot token (xoxb-...)" },
+};
+const TOKEN_FILE_MAX_BYTES = 4096;
+
 // A secret from VAR, or from the file named in VAR_FILE (preferred: keeps it out of configs).
-export function readSecret(env, name) {
-  if (env[name] && env[name].trim()) return env[name].trim();
+// With `shape` (a TOKEN_SHAPES entry) the value must look like that token, and a token file must be a
+// small regular file that is not accessible to "other" users (POSIX; the same bar as doctor's FAIL).
+// Error messages name the variable and path, never the contents.
+export function readSecret(env, name, { shape } = {}) {
+  const check = (value, where) => {
+    if (shape && !shape.re.test(value)) {
+      throw new BridgeError(`${where} doesn't hold ${shape.what}; refusing to send it anywhere. Check the variable.`);
+    }
+    return value;
+  };
+  if (env[name] && env[name].trim()) return check(env[name].trim(), name);
   const file = env[`${name}_FILE`];
   if (file) {
     const p = expandHome(file.trim());
+    if (shape) {
+      let st;
+      try {
+        st = statSync(p);
+      } catch (e) {
+        throw new BridgeError(`Can't read ${name}_FILE ${p}: ${e.code || e.message}`);
+      }
+      if (!st.isFile() || st.size > TOKEN_FILE_MAX_BYTES) {
+        throw new BridgeError(`${name}_FILE ${p} is not a token file (it must be a small regular file); refusing to send it anywhere.`);
+      }
+      if (process.platform !== "win32" && st.mode & 0o007) {
+        throw new BridgeError(
+          `${name}_FILE ${p} is accessible by other users (mode 0${(st.mode & 0o777).toString(8)}); refusing to use it. Run: chmod 600 ${p}`
+        );
+      }
+    }
+    let text;
     try {
-      return readFileSync(p, "utf8").trim();
+      text = readFileSync(p, "utf8").trim();
     } catch (e) {
       throw new BridgeError(`Can't read ${name}_FILE ${p}: ${e.code || e.message}`);
     }
+    return check(text, `${name}_FILE ${p}`);
   }
   return null;
 }
 
-export const readToken = (env = process.env) => readSecret(env, "AGENT_BRIDGE_TOKEN");
+export const readToken = (env = process.env) => readSecret(env, "AGENT_BRIDGE_TOKEN", { shape: TOKEN_SHAPES.AGENT_BRIDGE_TOKEN });
+export const readSlackToken = (env = process.env) => readSecret(env, "SLACK_BOT_TOKEN", { shape: TOKEN_SHAPES.SLACK_BOT_TOKEN });
 
 const intEnv = (v) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
@@ -84,9 +121,12 @@ export async function createStore({ env = process.env, agentName = env.AGENT_NAM
     const { SlackStore } = await import("./stores/slack.js");
     return new SlackStore({
       apiUrl: env.SLACK_API_URL || undefined,
-      token: readSecret(env, "SLACK_BOT_TOKEN"),
+      token: readSlackToken(env),
       channel: env.SLACK_CHANNEL_ID,
       lookbackHours: intEnv(env.AGENT_BRIDGE_LOOKBACK_HOURS),
+      maxPages: intEnv(env.AGENT_BRIDGE_SLACK_MAX_PAGES),
+      ratePerMinute: intEnv(env.AGENT_BRIDGE_RATE_PER_MIN),
+      maxUnreadPerSender: intEnv(env.AGENT_BRIDGE_MAX_UNREAD),
     });
   }
   const name = (agentName || "").trim();

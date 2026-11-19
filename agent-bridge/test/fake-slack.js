@@ -16,6 +16,7 @@ export async function startFakeSlack() {
   const channel = { id: "C0BRIDGE01", members: new Set() };
   const messages = []; // oldest first
   const throttle = new Set();
+  const throttleLeft = new Map(); // method -> number of next calls to answer with 429
   const calls = [];
   let clock = Math.floor(Date.now() / 1000) * 1_000_000; // microseconds, strictly increasing
   let nextUser = 1;
@@ -134,6 +135,10 @@ export async function startFakeSlack() {
     };
     const method = new URL(req.url, "http://x").pathname.replace(/^\/api\//, "");
     calls.push(method);
+    if (throttleLeft.get(method) > 0) {
+      throttleLeft.set(method, throttleLeft.get(method) - 1);
+      return send(429, { ok: false, error: "ratelimited" }, { "Retry-After": "1" });
+    }
     if (throttle.has(method)) return send(429, { ok: false, error: "ratelimited" }, { "Retry-After": "1" });
     if (!methods[method]) return send(404, { ok: false, error: "unknown_method" });
     if (!/application\/x-www-form-urlencoded/.test(req.headers["content-type"] || "")) {
@@ -153,6 +158,7 @@ export async function startFakeSlack() {
     users,
     messages,
     throttle,
+    throttleNext: (method, n) => throttleLeft.set(method, n),
     calls,
     addUser,
     // Post directly, as a human or a misbehaving bot would (text is used as given).
