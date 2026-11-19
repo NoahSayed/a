@@ -151,13 +151,13 @@ export function gate(ws, patchedPkgs, base) {
   const basePkg = JSON.parse(sh('git', ['show', `${base}:package.json`], { cwd: ws }).out);
   const depsChanged = JSON.stringify(Object.keys(pkg.dependencies || {}).sort()) !== JSON.stringify(Object.keys(basePkg.dependencies || {}).sort())
     || Object.keys(pkg.devDependencies || {}).length !== Object.keys(basePkg.devDependencies || {}).length;
-  const newScripts = Object.keys(pkg.scripts || {}).filter((k) => !(k in (basePkg.scripts || {})));
+  const newScripts = [...new Set([...Object.keys(pkg.scripts || {}), ...Object.keys(basePkg.scripts || {})])].filter((k) => (pkg.scripts || {})[k] !== (basePkg.scripts || {})[k]);
   const checks = {
     testsPass: tests.pass,
     vulnsCleared: after.length === 0,
     onlyAllowedFilesChanged: outOfScope.length === 0,
     noDependencySetChange: !depsChanged,
-    noNewScripts: newScripts.length === 0,
+    scriptsUnchanged: newScripts.length === 0,
   };
   return { pass: Object.values(checks).every(Boolean), checks, stillVulnerable: after, outOfScope, newScripts, testOutput: tests.output };
 }
