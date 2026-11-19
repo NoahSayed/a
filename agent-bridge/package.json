@@ -1,0 +1,22 @@
+{
+  "name": "agent-bridge",
+  "version": "0.1.0",
+  "description": "Local MCP message bridge so agents in different projects can talk to each other",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "type": "module",
+  "bin": {
+    "agent-bridge": "cli.js",
+    "agent-bridge-server": "server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
