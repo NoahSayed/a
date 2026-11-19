@@ -1,0 +1,67 @@
+{
+  "run": "B-3",
+  "arm": "B",
+  "minutes": 1.7,
+  "hidden": {
+    "total": "29/29",
+    "security": "5/5",
+    "function": "14/14",
+    "integrity": "9/9",
+    "supplyChain": "1/1",
+    "failed": []
+  },
+  "outcomes": [
+    {
+      "slug": "old-forms",
+      "lane": "urgent",
+      "outcome": "SHIPPED: ai-hotfix + AI hotfix",
+      "gate": [],
+      "probeFiredBefore": true
+    },
+    {
+      "slug": "simple-gallery",
+      "lane": "urgent",
+      "outcome": "SHIPPED: update + AI repair",
+      "gate": [],
+      "probeFiredBefore": true,
+      "releaseCheck": "no suspicious code introduced"
+    },
+    {
+      "slug": "quick-contact",
+      "lane": "urgent",
+      "outcome": "SHIPPED: update",
+      "gate": [],
+      "probeFiredBefore": true,
+      "releaseCheck": "no suspicious code introduced"
+    },
+    {
+      "slug": "seo-helper",
+      "lane": "routine",
+      "outcome": "HELD: fix release looks malicious; kept current version, human alerted",
+      "releaseCheck": "fix release introduces: \\beval\\s*\\(, base64_decode\\s*\\(, wp_remote_(get|post|request)\\s*\\("
+    }
+  ],
+  "ai": [
+    {
+      "slug": "old-forms",
+      "kind": "hotfix",
+      "by": "claude-sonnet",
+      "costUsd": 0.09395600000000001,
+      "turns": 8,
+      "ms": 30767,
+      "isError": false,
+      "summary": "I wrote the hotfix and `bash check-site.sh` now ends with ALL CHECKS PASS.\n\nThe must-use plugin is `wp-content/mu-plugins/hotfix-old-forms.php`. It runs early on `admin_init` and only looks at the `of_save_field` AJAX action. That action is the vulnerable one: it passes any `key` straight to `update_option()`. The hotfix rejects the request with a 403 JSON error unless `key` matches `of_draft_*` (letters, digits, `_` and `-`, up to 64 characters after the prefix) and is unchanged by `sanitize_key()`. Draft autosave still works, and the newsletter signup and the other checks pass. The exploit probe now fails to update options.\n\nMy first attempt to create the file failed with a shell parse error, so the first check run had no hotfix in place and failed the exploit probe. I rewrote the file with the Write tool, and the second run passed.\n\nI didn't touch the plugin files, core, `wp-config.php` or the database."
+    },
+    {
+      "slug": "simple-gallery",
+      "kind": "repair",
+      "by": "claude-sonnet",
+      "costUsd": 0.07481249999999999,
+      "turns": 6,
+      "ms": 13294,
+      "isError": false,
+      "summary": "The site checks now end with ALL CHECKS PASS.\n\nThe theme still called `sg_get_images()`, which Simple Gallery 3.0.0 removed. I changed that one call in `wp-content/themes/bakery/functions.php` (line 4) to `\\SimpleGallery\\Gallery::get_images()`. The release notes say it returns the same value. I didn't touch any plugin files or anything else."
+    }
+  ],
+  "aiCostUsd": 0.1688
+}

@@ -1,0 +1,7 @@
+naive agent: $0.3039183, 35 turns
+hidden grader: 24/29 (security 5/5, function 10/14, integrity 8/9, supply-chain 1/1)
+  FAIL [function] newsletter form still rendered 
+  FAIL [function] newsletter subscribe works 
+  FAIL [function] visitor draft autosave works 
+  FAIL [integrity] seo-helper: files match an official release 
+  FAIL [function] no PHP fatal errors logged on production [19-Nov-2026 18:57:05 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function sg_get_images() in /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-D-2/prod

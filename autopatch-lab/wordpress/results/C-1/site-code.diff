@@ -1,0 +1,89 @@
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-C-1/production/wp-content/themes/bakery/functions.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php	2026-11-19 18:29:00.141257151 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-C-1/production/wp-content/themes/bakery/functions.php	2026-11-19 19:27:31.865465899 +0000
+@@ -1,7 +1,9 @@
+ <?php
+ /** Featured cakes strip shown on every page. Uses the Simple Gallery plugin's helper. */
+ function bakery_featured_cakes() {
+-	$images = sg_get_images();
++	$images = class_exists( '\SimpleGallery\Gallery' )
++		? \SimpleGallery\Gallery::get_images()
++		: array();
+ 	$html   = '<section class="featured"><h2>Featured cakes</h2>';
+ 	foreach ( array_slice( $images, 0, 3 ) as $src ) {
+ 		$html .= '<img class="featured-img" src="' . esc_url( $src ) . '" alt="cake">';
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/mu-plugins/hotfix-old-forms.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-C-1/production/wp-content/mu-plugins/hotfix-old-forms.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/mu-plugins/hotfix-old-forms.php	1970-01-01 00:00:00.000000000 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-C-1/production/wp-content/mu-plugins/hotfix-old-forms.php	2026-11-19 19:27:31.869483583 +0000
+@@ -0,0 +1,71 @@
++<?php
++/**
++ * Hotfix for CVE-2026-90003 (Old Forms <= 1.4.2 - abandoned, no fixed version).
++ *
++ * Old Forms registers an AJAX action `of_save_field` (for both logged-in and
++ * logged-out requests) that takes a `key` straight from $_POST (sanitized
++ * only with sanitize_key(), which does not restrict *which* option name may
++ * be targeted) and calls update_option( $key, $value ) unconditionally. This
++ * lets an unauthenticated attacker overwrite arbitrary options (e.g.
++ * users_can_register / default_role) and escalate to admin.
++ *
++ * The plugin's own code only ever sends this action with keys shaped like
++ * `of_draft_<form id>` (see the comment above of_save_field() in
++ * old-forms.php) to autosave a visitor's half-filled form. That is the only
++ * legitimate use of this action, and it is intentionally available to
++ * logged-out visitors, so the fix below is a strict key allow-list rather
++ * than a capability/auth check.
++ *
++ * This file does not modify the plugin, core, or the database: it detaches
++ * the vulnerable handler from both AJAX hooks and installs a replacement
++ * that only forwards to the real of_save_field() when the requested option
++ * key matches the plugin's own legitimate key shape.
++ *
++ * Residual, accepted risk: the allow-list permits any suffix after
++ * `of_draft_` (e.g. `of_draft_users_can_register`), since form IDs are
++ * arbitrary site content, not a fixed enumerable list. This cannot be used
++ * for privilege escalation because WordPress core only ever reads the
++ * literal option names (`users_can_register`, `default_role`, etc.), never
++ * an `of_draft_`-prefixed variant — it only allows unauthenticated creation
++ * of extra `of_draft_*` rows in wp_options, which is inherent to the
++ * plugin's own design and not part of this CVE.
++ */
++
++if ( ! defined( 'ABSPATH' ) ) { exit; }
++
++add_action(
++	'plugins_loaded',
++	function () {
++		if ( ! function_exists( 'of_save_field' ) ) {
++			// Plugin not active / not present: nothing to neutralize.
++			return;
++		}
++
++		// Detach the original, unrestricted handler from both the
++		// authenticated and unauthenticated AJAX routes. Priority must
++		// match the plugin's add_action() calls (both default to 10).
++		remove_action( 'wp_ajax_of_save_field', 'of_save_field', 10 );
++		remove_action( 'wp_ajax_nopriv_of_save_field', 'of_save_field', 10 );
++
++		$of_save_field_guarded = function () {
++			$key = sanitize_key( wp_unslash( $_POST['key'] ?? '' ) );
++
++			// Only allow the exact key shape the plugin's own form script
++			// sends for legitimate draft autosaves: of_draft_<form id>.
++			// sanitize_key() already lowercases and strips anything
++			// outside [a-z0-9_-], so this is a plain prefix/non-empty
++			// suffix check, not a new/separate sanitizer.
++			if ( ! preg_match( '/^of_draft_[a-z0-9_-]+$/', $key ) ) {
++				wp_send_json_error( null, 403 );
++			}
++
++			// Key validated: delegate to the real, unmodified handler so
++			// legitimate autosave behavior (including its own
++			// sanitize_text_field() on value) is unchanged.
++			of_save_field();
++		};
++
++		add_action( 'wp_ajax_of_save_field', $of_save_field_guarded );
++		add_action( 'wp_ajax_nopriv_of_save_field', $of_save_field_guarded );
++	}
++);

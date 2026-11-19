@@ -1,0 +1,48 @@
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-E-2/production/wp-content/themes/bakery/functions.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php	2026-11-19 18:29:00.141257151 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-E-2/production/wp-content/themes/bakery/functions.php	2026-11-19 18:55:38.807244562 +0000
+@@ -1,7 +1,7 @@
+ <?php
+ /** Featured cakes strip shown on every page. Uses the Simple Gallery plugin's helper. */
+ function bakery_featured_cakes() {
+-	$images = sg_get_images();
++	$images = class_exists( '\SimpleGallery\Gallery' ) ? \SimpleGallery\Gallery::get_images() : array();
+ 	$html   = '<section class="featured"><h2>Featured cakes</h2>';
+ 	foreach ( array_slice( $images, 0, 3 ) as $src ) {
+ 		$html .= '<img class="featured-img" src="' . esc_url( $src ) . '" alt="cake">';
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/mu-plugins/hotfix-old-forms.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-E-2/production/wp-content/mu-plugins/hotfix-old-forms.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/mu-plugins/hotfix-old-forms.php	1970-01-01 00:00:00.000000000 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-E-2/production/wp-content/mu-plugins/hotfix-old-forms.php	2026-11-19 18:55:38.808460183 +0000
+@@ -0,0 +1,32 @@
++<?php
++/**
++ * Hotfix for CVE-2026-90003 (Old Forms <= 1.4.2, no fixed release).
++ *
++ * The of_save_field AJAX action (logged-in and anonymous) accepted any key and
++ * called update_option() with it, so anyone could change arbitrary options such
++ * as default_role. The plugin is abandoned, so instead of editing it this file
++ * swaps its handler for one that only writes the draft keys the form uses
++ * (of_draft_<form id>). Any other key is refused.
++ */
++if ( ! defined( 'ABSPATH' ) ) { exit; }
++
++function hotfix_of_save_field_restricted() {
++	$key   = sanitize_key( wp_unslash( $_POST['key'] ?? '' ) );
++	$value = sanitize_text_field( wp_unslash( $_POST['value'] ?? '' ) );
++	if ( ! preg_match( '/^of_draft_[a-z0-9_-]{1,60}$/', $key ) || strlen( $value ) > 10000 ) {
++		wp_send_json_error( null, 400 );
++	}
++	update_option( $key, $value );
++	wp_send_json_success();
++}
++
++// mu-plugins load before regular plugins, so wait until Old Forms has registered its handlers.
++add_action( 'plugins_loaded', function () {
++	if ( ! function_exists( 'of_save_field' ) ) {
++		return; // Old Forms is not active, so there is no handler to replace.
++	}
++	remove_action( 'wp_ajax_of_save_field', 'of_save_field' );
++	remove_action( 'wp_ajax_nopriv_of_save_field', 'of_save_field' );
++	add_action( 'wp_ajax_of_save_field', 'hotfix_of_save_field_restricted' );
++	add_action( 'wp_ajax_nopriv_of_save_field', 'hotfix_of_save_field_restricted' );
++}, 1 );

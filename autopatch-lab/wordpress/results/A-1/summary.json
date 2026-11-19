@@ -1,0 +1,63 @@
+{
+  "run": "A-1",
+  "arm": "A",
+  "minutes": 0.7,
+  "hidden": {
+    "total": "24/29",
+    "security": "3/5",
+    "function": "11/14",
+    "integrity": "9/9",
+    "supplyChain": "1/1",
+    "failed": [
+      "newsletter form still rendered",
+      "newsletter subscribe works",
+      "visitor draft autosave works",
+      "simple-gallery: wp-config.php not readable via traversal",
+      "simple-gallery: files outside gallery not readable"
+    ]
+  },
+  "outcomes": [
+    {
+      "slug": "old-forms",
+      "lane": "urgent",
+      "outcome": "SHIPPED: deactivate (feature loss accepted: critical, no fix exists; human alerted)",
+      "gate": [
+        "flow: newsletter subscribe (0)",
+        "flow: form draft autosave (0)"
+      ],
+      "probeFiredBefore": true
+    },
+    {
+      "slug": "simple-gallery",
+      "lane": "urgent",
+      "outcome": "NOT SHIPPED: staging gate failed; still vulnerable, human alerted",
+      "gate": [
+        "page loads: home (500 (PHP error on page))",
+        "page loads: contact page (500 (PHP error on page))",
+        "page loads: gallery page (500 (PHP error on page))",
+        "page loads: newsletter page (500 (PHP error on page))",
+        "home shows featured cakes ()",
+        "gallery shows images ()",
+        "no PHP fatal errors during checks ([19-Nov-2026 18:41:40 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function sg_get_images() in /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-A-1/staging/wp-content/themes/bakery/functions.php:4 | [19-Nov-2026 18:41:40 UTC] PHP Fatal error:  Uncaught)"
+      ],
+      "probeFiredBefore": true,
+      "releaseCheck": "no suspicious code introduced"
+    },
+    {
+      "slug": "quick-contact",
+      "lane": "urgent",
+      "outcome": "SHIPPED: update",
+      "gate": [],
+      "probeFiredBefore": true,
+      "releaseCheck": "no suspicious code introduced"
+    },
+    {
+      "slug": "seo-helper",
+      "lane": "routine",
+      "outcome": "HELD: fix release looks malicious; kept current version, human alerted",
+      "releaseCheck": "fix release introduces: \\beval\\s*\\(, base64_decode\\s*\\(, wp_remote_(get|post|request)\\s*\\("
+    }
+  ],
+  "ai": [],
+  "aiCostUsd": 0
+}

@@ -1,0 +1,63 @@
+{
+  "run": "C-1",
+  "arm": "C",
+  "minutes": 28.5,
+  "hidden": {
+    "total": "29/29",
+    "security": "5/5",
+    "function": "14/14",
+    "integrity": "9/9",
+    "supplyChain": "1/1",
+    "failed": []
+  },
+  "outcomes": [
+    {
+      "slug": "old-forms",
+      "lane": "urgent",
+      "outcome": "SHIPPED: ai-hotfix + AI hotfix",
+      "gate": [],
+      "probeFiredBefore": true
+    },
+    {
+      "slug": "simple-gallery",
+      "lane": "urgent",
+      "outcome": "SHIPPED: update + AI repair",
+      "gate": [],
+      "probeFiredBefore": true,
+      "releaseCheck": "no suspicious code introduced"
+    },
+    {
+      "slug": "quick-contact",
+      "lane": "urgent",
+      "outcome": "SHIPPED: update",
+      "gate": [],
+      "probeFiredBefore": true,
+      "releaseCheck": "no suspicious code introduced"
+    },
+    {
+      "slug": "seo-helper",
+      "lane": "routine",
+      "outcome": "HELD: fix release looks malicious; kept current version, human alerted",
+      "releaseCheck": "fix release introduces: \\beval\\s*\\(, base64_decode\\s*\\(, wp_remote_(get|post|request)\\s*\\("
+    }
+  ],
+  "ai": [
+    {
+      "slug": "old-forms",
+      "kind": "hotfix",
+      "by": "agent-loop",
+      "costUsd": 2.26,
+      "ms": 959916,
+      "exitCode": 0
+    },
+    {
+      "slug": "simple-gallery",
+      "kind": "repair",
+      "by": "agent-loop",
+      "costUsd": 1.6,
+      "ms": 690862,
+      "exitCode": 0
+    }
+  ],
+  "aiCostUsd": 3.86
+}

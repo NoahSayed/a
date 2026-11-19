@@ -1,0 +1,7 @@
+old-forms: AI hotfix by agent-loop: $2.26
+old-forms: SHIPPED: ai-hotfix + AI hotfix
+simple-gallery: AI repair by agent-loop: $1.6
+simple-gallery: SHIPPED: update + AI repair
+quick-contact: SHIPPED: update
+seo-helper: HELD: fix release looks malicious; kept current version, human alerted
+hidden grader: 29/29 (security 5/5, function 14/14, integrity 9/9, supply-chain 1/1)

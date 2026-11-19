@@ -1,0 +1,18 @@
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-D-2/production/wp-content/themes/bakery/functions.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php	2026-11-19 18:29:00.141257151 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-D-2/production/wp-content/themes/bakery/functions.php	2026-11-19 18:57:12.109357727 +0000
+@@ -1,7 +1,13 @@
+ <?php
+ /** Featured cakes strip shown on every page. Uses the Simple Gallery plugin's helper. */
+ function bakery_featured_cakes() {
+-	$images = sg_get_images();
++	if ( class_exists( '\SimpleGallery\Gallery' ) ) {
++		$images = \SimpleGallery\Gallery::get_images();
++	} elseif ( function_exists( 'sg_get_images' ) ) {
++		$images = sg_get_images();
++	} else {
++		$images = array();
++	}
+ 	$html   = '<section class="featured"><h2>Featured cakes</h2>';
+ 	foreach ( array_slice( $images, 0, 3 ) as $src ) {
+ 		$html .= '<img class="featured-img" src="' . esc_url( $src ) . '" alt="cake">';

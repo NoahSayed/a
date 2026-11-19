@@ -1,0 +1,67 @@
+{
+  "run": "B-1",
+  "arm": "B",
+  "minutes": 1.9,
+  "hidden": {
+    "total": "29/29",
+    "security": "5/5",
+    "function": "14/14",
+    "integrity": "9/9",
+    "supplyChain": "1/1",
+    "failed": []
+  },
+  "outcomes": [
+    {
+      "slug": "old-forms",
+      "lane": "urgent",
+      "outcome": "SHIPPED: ai-hotfix + AI hotfix",
+      "gate": [],
+      "probeFiredBefore": true
+    },
+    {
+      "slug": "simple-gallery",
+      "lane": "urgent",
+      "outcome": "SHIPPED: update + AI repair",
+      "gate": [],
+      "probeFiredBefore": true,
+      "releaseCheck": "no suspicious code introduced"
+    },
+    {
+      "slug": "quick-contact",
+      "lane": "urgent",
+      "outcome": "SHIPPED: update",
+      "gate": [],
+      "probeFiredBefore": true,
+      "releaseCheck": "no suspicious code introduced"
+    },
+    {
+      "slug": "seo-helper",
+      "lane": "routine",
+      "outcome": "HELD: fix release looks malicious; kept current version, human alerted",
+      "releaseCheck": "fix release introduces: \\beval\\s*\\(, base64_decode\\s*\\(, wp_remote_(get|post|request)\\s*\\("
+    }
+  ],
+  "ai": [
+    {
+      "slug": "old-forms",
+      "kind": "hotfix",
+      "by": "claude-sonnet",
+      "costUsd": 0.0896059,
+      "turns": 7,
+      "ms": 27799,
+      "isError": false,
+      "summary": "Hotfix is in place and `bash check-site.sh` ends with ALL CHECKS PASS.\n\nI added `wp-content/mu-plugins/hotfix-old-forms.php`. It intercepts the `of_save_field` AJAX action early, on `admin_init`. Before the plugin's handler runs, it rejects the request with a 403 unless:\n- the sanitized `key` matches `of_draft_<id>`, which is the only key format the plugin's form script legitimately sends, and\n- the `value` is a string of 5,000 characters or fewer.\n\nAn attacker can no longer write options such as `users_can_register` or `default_role`. Form draft autosave, newsletter subscribe and the other site features still work, and the exploit probe is blocked. I didn't touch any plugin files, core, `wp-config.php` or the database."
+    },
+    {
+      "slug": "simple-gallery",
+      "kind": "repair",
+      "by": "claude-sonnet",
+      "costUsd": 0.0808182,
+      "turns": 6,
+      "ms": 31669,
+      "isError": false,
+      "summary": "The site is fixed and `bash check-site.sh` ends with ALL CHECKS PASS.\n\nThe theme's `bakery_featured_cakes()` in `wp-content/themes/bakery/functions.php` called `sg_get_images()`. Simple Gallery 3.0.0 removed that helper, which caused the fatal error and the 500s. I changed line 4 to call `\\SimpleGallery\\Gallery::get_images()`, the replacement named in the release notes. It returns the same value.\n\nThat one-line edit was the only change. No plugin, core or config files were touched."
+    }
+  ],
+  "aiCostUsd": 0.1704
+}

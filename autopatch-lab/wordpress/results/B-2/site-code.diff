@@ -1,0 +1,33 @@
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-B-2/production/wp-content/themes/bakery/functions.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php	2026-11-19 18:29:00.141257151 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-B-2/production/wp-content/themes/bakery/functions.php	2026-11-19 18:51:55.698088574 +0000
+@@ -1,7 +1,7 @@
+ <?php
+ /** Featured cakes strip shown on every page. Uses the Simple Gallery plugin's helper. */
+ function bakery_featured_cakes() {
+-	$images = sg_get_images();
++	$images = \SimpleGallery\Gallery::get_images();
+ 	$html   = '<section class="featured"><h2>Featured cakes</h2>';
+ 	foreach ( array_slice( $images, 0, 3 ) as $src ) {
+ 		$html .= '<img class="featured-img" src="' . esc_url( $src ) . '" alt="cake">';
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/mu-plugins/hotfix-old-forms.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-B-2/production/wp-content/mu-plugins/hotfix-old-forms.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/mu-plugins/hotfix-old-forms.php	1970-01-01 00:00:00.000000000 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-B-2/production/wp-content/mu-plugins/hotfix-old-forms.php	2026-11-19 18:51:55.699458520 +0000
+@@ -0,0 +1,17 @@
++<?php
++/*
++Plugin Name: Hotfix Old Forms (CVE-2026-90003)
++Description: Restricts the of_save_field AJAX action to of_draft_* option keys.
++*/
++if ( ! defined( 'ABSPATH' ) ) { exit; }
++
++add_action( 'admin_init', function () {
++	if ( ! wp_doing_ajax() || ( $_REQUEST['action'] ?? '' ) !== 'of_save_field' ) {
++		return;
++	}
++	$raw = $_POST['key'] ?? '';
++	$key = is_string( $raw ) ? sanitize_key( wp_unslash( $raw ) ) : '';
++	if ( ! preg_match( '/^of_draft_[a-z0-9_-]{1,64}$/', $key ) ) {
++		wp_send_json_error( 'Forbidden key', 403 );
++	}
++}, 0 );

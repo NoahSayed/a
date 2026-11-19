@@ -1,0 +1,66 @@
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-E-1/production/wp-content/themes/bakery/functions.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/themes/bakery/functions.php	2026-11-19 18:29:00.141257151 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-E-1/production/wp-content/themes/bakery/functions.php	2026-11-19 18:47:36.337323501 +0000
+@@ -1,7 +1,7 @@
+ <?php
+-/** Featured cakes strip shown on every page. Uses the Simple Gallery plugin's helper. */
++/** Featured cakes strip shown on every page. Uses Simple Gallery 3.0+ (sg_get_images() was removed). */
+ function bakery_featured_cakes() {
+-	$images = sg_get_images();
++	$images = class_exists( '\SimpleGallery\Gallery' ) ? \SimpleGallery\Gallery::get_images() : array();
+ 	$html   = '<section class="featured"><h2>Featured cakes</h2>';
+ 	foreach ( array_slice( $images, 0, 3 ) as $src ) {
+ 		$html .= '<img class="featured-img" src="' . esc_url( $src ) . '" alt="cake">';
+diff -ruN /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/mu-plugins/hotfix-old-forms.php /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-E-1/production/wp-content/mu-plugins/hotfix-old-forms.php
+--- /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/_base-site/wp-content/mu-plugins/hotfix-old-forms.php	1970-01-01 00:00:00.000000000 +0000
++++ /tmp/claude-0/-home-user-a/085e7a47-7d23-560e-b39e-f8f23f36655f/scratchpad/wplab/run-E-1/production/wp-content/mu-plugins/hotfix-old-forms.php	2026-11-19 18:47:36.341607002 +0000
+@@ -0,0 +1,49 @@
++<?php
++/**
++ * Plugin Name: Hotfix for Old Forms (CVE-2026-90003)
++ * Description: Replaces the unauthenticated of_save_field AJAX handler of the abandoned
++ *              "old-forms" plugin (<= 1.4.2) with one that may only write the plugin's own
++ *              draft-autosave options (keys beginning with "of_draft_"). Arbitrary option
++ *              updates, such as default_role or users_can_register, are refused.
++ *
++ * The plugin file itself is not modified. This mu-plugin only swaps the handler at runtime.
++ */
++
++if ( ! defined( 'ABSPATH' ) ) {
++	exit;
++}
++
++/**
++ * Hardened replacement for the plugin's of_save_field() handler.
++ *
++ * Same request contract as the original (POST: key, value; JSON response), but the key
++ * must be a draft-autosave key. Anything else is rejected before update_option() runs.
++ */
++function hotfix_of_save_field() {
++	$key   = sanitize_key( wp_unslash( $_POST['key'] ?? '' ) );
++	$value = sanitize_text_field( wp_unslash( $_POST['value'] ?? '' ) );
++
++	// Only the draft-autosave namespace (of_draft_<form id>) may be written.
++	if ( ! preg_match( '/^of_draft_[a-z0-9_\-]{1,100}$/', $key ) ) {
++		wp_send_json_error( null, 400 );
++	}
++
++	update_option( $key, $value );
++	wp_send_json_success();
++}
++
++/**
++ * Swap the plugin's handlers for the hardened one. Runs after all active plugins have
++ * registered their hooks, so the original handler is present to be removed.
++ * Does nothing if the old-forms plugin is not active.
++ */
++function hotfix_old_forms_swap_handler() {
++	if ( ! function_exists( 'of_save_field' ) ) {
++		return;
++	}
++	remove_action( 'wp_ajax_of_save_field', 'of_save_field', 10 );
++	remove_action( 'wp_ajax_nopriv_of_save_field', 'of_save_field', 10 );
++	add_action( 'wp_ajax_of_save_field', 'hotfix_of_save_field' );
++	add_action( 'wp_ajax_nopriv_of_save_field', 'hotfix_of_save_field' );
++}
++add_action( 'plugins_loaded', 'hotfix_old_forms_swap_handler', 999 );

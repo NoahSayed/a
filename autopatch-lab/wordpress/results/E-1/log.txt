@@ -1,0 +1,7 @@
+old-forms: AI hotfix by claude-haiku: $0.01111792
+old-forms: SHIPPED: ai-hotfix + AI hotfix
+simple-gallery: AI repair by claude-haiku: $0.00623749
+simple-gallery: SHIPPED: update + AI repair
+quick-contact: SHIPPED: update
+seo-helper: HELD: fix release looks malicious; kept current version, human alerted
+hidden grader: 29/29 (security 5/5, function 14/14, integrity 9/9, supply-chain 1/1)
