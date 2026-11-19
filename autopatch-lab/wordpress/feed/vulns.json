@@ -1,0 +1,55 @@
+{
+  "_note": "Lab feed shaped like the Wordfence Intelligence v3 production feed (a map of id -> record). The plugins and CVE numbers are fictional lab fixtures.",
+  "a1f0c0de-0001-4000-8000-000000000001": {
+    "id": "a1f0c0de-0001-4000-8000-000000000001",
+    "title": "Quick Contact <= 1.0.0 - Missing Authorization to Unauthenticated Settings Update",
+    "software": [{ "type": "plugin", "name": "Quick Contact", "slug": "quick-contact",
+      "affected_versions": { "* - 1.0.0": { "from_version": "*", "from_inclusive": true, "to_version": "1.0.0", "to_inclusive": true } },
+      "patched": true, "patched_versions": ["1.0.1"], "remediation": "Update to version 1.0.1, or a newer patched version" }],
+    "informational": false,
+    "description": "The Quick Contact plugin is vulnerable to unauthorized modification of data due to a missing capability check on the qc_save_settings AJAX action in versions up to, and including, 1.0.0. This makes it possible for unauthenticated attackers to change the address that contact form messages are sent to.",
+    "references": ["https://example.invalid/advisories/quick-contact"],
+    "cwe": { "id": 862, "name": "Missing Authorization" },
+    "cvss": { "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N", "score": 5.3, "rating": "Medium" },
+    "cve": "CVE-2026-90001", "published": "2026-11-17 10:00:00", "updated": "2026-11-17 10:00:00"
+  },
+  "a1f0c0de-0002-4000-8000-000000000002": {
+    "id": "a1f0c0de-0002-4000-8000-000000000002",
+    "title": "Simple Gallery <= 2.0.0 - Unauthenticated Path Traversal to Arbitrary File Read",
+    "software": [{ "type": "plugin", "name": "Simple Gallery", "slug": "simple-gallery",
+      "affected_versions": { "* - 2.0.0": { "from_version": "*", "from_inclusive": true, "to_version": "2.0.0", "to_inclusive": true } },
+      "patched": true, "patched_versions": ["3.0.0"], "remediation": "Update to version 3.0.0, or a newer patched version" }],
+    "informational": false,
+    "description": "The Simple Gallery plugin is vulnerable to Path Traversal in all versions up to, and including, 2.0.0 via the sg_download parameter. This makes it possible for unauthenticated attackers to read the contents of arbitrary files on the server, which can contain sensitive information such as wp-config.php.",
+    "references": ["https://example.invalid/advisories/simple-gallery"],
+    "cwe": { "id": 22, "name": "Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')" },
+    "cvss": { "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N", "score": 7.5, "rating": "High" },
+    "cve": "CVE-2026-90002", "published": "2026-11-18 08:00:00", "updated": "2026-11-18 08:00:00"
+  },
+  "a1f0c0de-0003-4000-8000-000000000003": {
+    "id": "a1f0c0de-0003-4000-8000-000000000003",
+    "title": "Old Forms <= 1.4.2 - Unauthenticated Arbitrary Options Update to Privilege Escalation",
+    "software": [{ "type": "plugin", "name": "Old Forms", "slug": "old-forms",
+      "affected_versions": { "* - 1.4.2": { "from_version": "*", "from_inclusive": true, "to_version": "1.4.2", "to_inclusive": true } },
+      "patched": false, "patched_versions": [], "remediation": "No known patch available. Please review the vulnerability's details in depth and employ mitigations based on your organization's risk tolerance. It may be best to uninstall the affected software and find a replacement." }],
+    "informational": false,
+    "description": "The Old Forms plugin is vulnerable to unauthorized arbitrary option updates due to a missing capability check and missing key restriction on the of_save_field AJAX action in all versions up to, and including, 1.4.2. This makes it possible for unauthenticated attackers to update arbitrary options on the WordPress site, which can be leveraged to enable user registration and set the default role to administrator. The plugin has been closed and is no longer maintained.",
+    "references": ["https://example.invalid/advisories/old-forms"],
+    "cwe": { "id": 862, "name": "Missing Authorization" },
+    "cvss": { "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "score": 9.8, "rating": "Critical" },
+    "cve": "CVE-2026-90003", "published": "2026-11-19 06:00:00", "updated": "2026-11-19 06:00:00"
+  },
+  "a1f0c0de-0004-4000-8000-000000000004": {
+    "id": "a1f0c0de-0004-4000-8000-000000000004",
+    "title": "SEO Helper <= 1.1.0 - Authenticated (Contributor+) Stored Cross-Site Scripting via seo_note Shortcode",
+    "software": [{ "type": "plugin", "name": "SEO Helper", "slug": "seo-helper",
+      "affected_versions": { "* - 1.1.0": { "from_version": "*", "from_inclusive": true, "to_version": "1.1.0", "to_inclusive": true } },
+      "patched": true, "patched_versions": ["1.1.1"], "remediation": "Update to version 1.1.1, or a newer patched version" }],
+    "informational": false,
+    "description": "The SEO Helper plugin is vulnerable to Stored Cross-Site Scripting via the seo_note shortcode in versions up to, and including, 1.1.0 due to insufficient output escaping on user supplied attributes. This makes it possible for authenticated attackers, with contributor-level access and above, to inject arbitrary web scripts in pages.",
+    "references": ["https://example.invalid/advisories/seo-helper"],
+    "cwe": { "id": 79, "name": "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')" },
+    "cvss": { "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:L/I:L/A:N", "score": 6.4, "rating": "Medium" },
+    "cve": "CVE-2026-90004", "published": "2026-11-16 12:00:00", "updated": "2026-11-16 12:00:00"
+  }
+}

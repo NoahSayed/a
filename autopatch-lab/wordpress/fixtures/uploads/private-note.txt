@@ -1,0 +1,2 @@
+Not a cake. If you can read this through the gallery download, path traversal works.
+SECRET-UPLOADS-NOTE
