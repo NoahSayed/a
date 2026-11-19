@@ -306,6 +306,17 @@ await test("R2-15 half-open and idle sockets are closed within the timeout", asy
   }
 });
 
+await test("R2-15 a request whose body stalls is cut by the socket idle timeout (long before the request timeout)", async () => {
+  const r = await relayWith({ RELAY_IDLE_TIMEOUT_MS: "1000", RELAY_HEADERS_TIMEOUT_MS: "5000", RELAY_REQUEST_TIMEOUT_MS: "20000" });
+  try {
+    const s = await openSock(r.port, "POST /rest/v1/rpc/bridge_whoami HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{\"p_to");
+    const ms = await Promise.race([s.closed, sleep(6000).then(() => Infinity)]);
+    assert.ok(ms < 5000, `a stalled body was still open after ${ms} ms`);
+  } finally {
+    await r.stop();
+  }
+});
+
 await test("R2-15 a dripping client (a header byte every 300 ms) is cut by the header timeout", async () => {
   const r = await relayWith({ RELAY_IDLE_TIMEOUT_MS: "5000", RELAY_HEADERS_TIMEOUT_MS: "1000" });
   try {

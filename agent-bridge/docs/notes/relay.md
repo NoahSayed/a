@@ -107,7 +107,10 @@ refused admin actions not audited; mTLS doesn't require a client certificate. (N
 Findings R2-01, 02, 03, 04, 05, 09, 10, 13, 14 and 15 of [round-02.md](../adversary/round-02.md) (the relay and its audit log). The rest of round 2
 (Slack, hooks, token file handling) is handled elsewhere. Tests: `test/regressions-r2-relay.js` (`node test/regressions-r2-relay.js`), written first and run on the
 code the round attacked: **0 of 24 passed** (two of them, in the R2-02 and R2-05 groups, reach into the new `relay.audit` / `relay.core` handles and so can only fail there on
-the API; the others failed on the behaviour itself, evidence in the commit message of the work). One test was added while fixing (a silent connection on the TLS port), so the suite has 25 tests.
+the API; the other 22 failed on the behaviour itself, e.g. `RELAY_LEGAL_HOLD="true": purge was 200`, `11 of 11 half-open sockets were still open after 6 s`, `340 connections were held open at once (cap 60)`,
+`bridge_whoami.p_token: 500`, `120 auth_failed lines`, `{"ok":false,"line":3,"reason":"not valid JSON"}`, `TZ=UTC p_to="2026-11-19T18:33:01" -> 200`). Two tests were added while fixing (a silent connection on the TLS
+port, a stalled request body), so the suite has 26 tests. Two test-side lessons: a client socket nobody reads from never notices that the server closed it (the tests call `resume()`),
+and the connection-burst check looks for up to a second instead of at one instant, so a loaded machine can't fail it.
 Mutations are named `R2-xx ...` in `test/mutations.js` (`node test/mutations.js "R2-"`).
 
 | id | fix | test | mutations |
