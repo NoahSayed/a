@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { startRelayProcess } from "./backends.js";
-import { runCli, summary, test } from "./harness.js";
+import { homeEnv, rmrf, runCli, summary, test } from "./harness.js";
 import { SupabaseAdmin } from "../stores/supabase.js";
 import { createStore } from "../store.js";
 
@@ -294,6 +294,16 @@ await test("the relay never logs tokens or keys", async () => {
 
 // ------------------------------------------------------------------ at rest
 
+// POSIX permission bits don't exist on NTFS (Windows protects these files with the user-profile ACL),
+// so mode assertions only run on POSIX.
+const POSIX = process.platform !== "win32";
+const assertPrivate = (f, what = f) => {
+  if (POSIX) assert.equal(statSync(f).mode & 0o077, 0, `${what} is accessible to others`);
+};
+const assertMode600 = (f) => {
+  if (POSIX) assert.equal(statSync(f).mode & 0o777, 0o600);
+};
+
 console.log("\n=== relay: files and persistence ===");
 
 await test("the database file is private (0600) and so are its WAL files", async () => {
@@ -301,10 +311,10 @@ await test("the database file is private (0600) and so are its WAL files", async
   const r = await relayWith({ RELAY_DB: join(dir, "relay.db") });
   await r.addAgents("alice");
   for (const f of [r.dbPath, r.dbPath + "-wal", r.dbPath + "-shm"]) {
-    if (existsSync(f)) assert.equal(statSync(f).mode & 0o077, 0, `${f} is accessible to others`);
+    if (existsSync(f)) assertPrivate(f);
   }
-  assert.equal(statSync(r.dbPath).mode & 0o777, 0o600);
-  assert.equal(statSync(dir).mode & 0o077, 0, "directory is accessible to others");
+  assertMode600(r.dbPath);
+  if (POSIX) assert.equal(statSync(dir).mode & 0o077, 0, "directory is accessible to others");
   await r.stop();
 });
 
@@ -382,7 +392,7 @@ await test("audit log: sends and deliveries recorded with hashes, never bodies o
   await r.stop();
   const raw = readFileSync(audit, "utf8");
   for (const secret of [body, "SUBJECT-LINE-XYZ", ...Object.values(r.tokens), r.adminKey, "x".repeat(40)]) assert.ok(!raw.includes(secret), "secret or body in the audit log");
-  assert.equal(statSync(audit).mode & 0o077, 0);
+  assertPrivate(audit, "audit log");
   const lines = readAudit(audit);
   const send = lines.find((l) => l.action === "send");
   assert.equal(send.agent, "alice");
@@ -734,11 +744,11 @@ console.log("\n=== relay: admin CLI ===");
 await test("cli admin commands work against the relay (RELAY_URL + RELAY_ADMIN_KEY)", async () => {
   const r = await relayWith();
   const HOME = mkdtempSync(join(tmp, "home-"));
-  const env = { HOME, RELAY_URL: r.url, RELAY_ADMIN_KEY: r.adminKey };
+  const env = { ...homeEnv(HOME), RELAY_URL: r.url, RELAY_ADMIN_KEY: r.adminKey };
   const add = await runCli(["add-agent", "gamma", "API server", "--save"], env);
   assert.equal(add.code, 0, add.err);
   const tf = join(HOME, ".agent-bridge", "tokens", "gamma.token");
-  assert.equal(statSync(tf).mode & 0o777, 0o600);
+  assertMode600(tf);
   const tok = readFileSync(tf, "utf8").trim();
   assert.equal((await r.call("bridge_whoami", { p_token: tok })).json.agent, "gamma");
   assert.match((await runCli(["add-agent", "gamma"], env)).err, /already exists/);
@@ -752,13 +762,13 @@ await test("cli admin commands work against the relay (RELAY_URL + RELAY_ADMIN_K
   // a wrong admin key is refused, a missing one explains itself
   const bad = await runCli(["add-agent", "delta"], { ...env, RELAY_ADMIN_KEY: key() });
   assert.notEqual(bad.code, 0);
-  const missing = await runCli(["add-agent", "delta"], { HOME, RELAY_URL: r.url });
+  const missing = await runCli(["add-agent", "delta"], { ...homeEnv(HOME), RELAY_URL: r.url });
   assert.notEqual(missing.code, 0);
   assert.match(missing.err, /RELAY_ADMIN_KEY/);
   // the admin key may also come from a file
   const kf = join(HOME, "admin.key");
   writeFileSync(kf, r.adminKey + "\n");
-  assert.equal((await runCli(["add-agent", "delta"], { HOME, RELAY_URL: r.url, RELAY_ADMIN_KEY_FILE: kf })).code, 0);
+  assert.equal((await runCli(["add-agent", "delta"], { ...homeEnv(HOME), RELAY_URL: r.url, RELAY_ADMIN_KEY_FILE: kf })).code, 0);
   await r.stop();
 });
 
@@ -766,14 +776,14 @@ await test("cli init --relay wires a repo to the relay (token file, no token in 
   const r = await relayWith();
   const HOME = mkdtempSync(join(tmp, "home-"));
   const repo = mkdtempSync(join(tmp, "repo-"));
-  const env = { HOME, RELAY_URL: r.url, RELAY_ADMIN_KEY: r.adminKey };
+  const env = { ...homeEnv(HOME), RELAY_URL: r.url, RELAY_ADMIN_KEY: r.adminKey };
   const no = await runCli(["init", repo, "gamma", "--relay"], { HOME });
   assert.notEqual(no.code, 0);
   assert.match(no.err, /RELAY_URL/);
-  const noTok = await runCli(["init", repo, "gamma", "--relay"], { HOME, RELAY_URL: r.url });
+  const noTok = await runCli(["init", repo, "gamma", "--relay"], { ...homeEnv(HOME), RELAY_URL: r.url });
   assert.match(noTok.err, /no token file/);
   await runCli(["add-agent", "gamma", "--save"], env);
-  const ok = await runCli(["init", repo, "gamma", "API", "--relay"], { HOME, RELAY_URL: r.url });
+  const ok = await runCli(["init", repo, "gamma", "API", "--relay"], { ...homeEnv(HOME), RELAY_URL: r.url });
   assert.equal(ok.code, 0, ok.err);
   const mcp = JSON.parse(readFileSync(join(repo, ".mcp.json"), "utf8"));
   const e = mcp.mcpServers.bridge.env;
@@ -781,10 +791,10 @@ await test("cli init --relay wires a repo to the relay (token file, no token in 
   assert.equal(e.RELAY_URL, r.url);
   assert.equal(e.AGENT_BRIDGE_TOKEN_FILE, join(HOME, ".agent-bridge", "tokens", "gamma.token"));
   assert.ok(!readFileSync(join(repo, ".mcp.json"), "utf8").includes(readFileSync(e.AGENT_BRIDGE_TOKEN_FILE, "utf8").trim()));
-  assert.match((await runCli(["init", repo, "gamma", "--relay", "--supabase"], { HOME, RELAY_URL: r.url })).err, /choose one/);
+  assert.match((await runCli(["init", repo, "gamma", "--relay", "--supabase"], { ...homeEnv(HOME), RELAY_URL: r.url })).err, /choose one/);
   await r.stop();
 });
 
 await R.stop();
-rmSync(tmp, { recursive: true, force: true });
+rmrf(tmp);
 process.exit(summary() ? 1 : 0);
