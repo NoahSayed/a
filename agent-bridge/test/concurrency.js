@@ -33,14 +33,17 @@ for (const make of await backendsFromArgs()) {
     if (!b.remote) {
       await test("12 agents starting at the same instant on a brand-new database", async () => {
         const env = b.envFor("ping");
-        const fresh = { ...env, AGENT_BRIDGE_DB: env.AGENT_BRIDGE_DB.replace(/bridge\.db$/, "fresh-start.db") };
         const names = Array.from({ length: 12 }, (_, i) => `starter${i}`);
-        const res = await Promise.all(
-          names.map((n, i) =>
-            worker({ ...fresh, AGENT_NAME: n }, "send", { to: names[(i + 1) % names.length], body: `hi from ${n}` })
-          )
-        );
-        assert.equal(res.flat().length, 12);
+        for (let round = 0; round < 3; round++) {
+          const fresh = { ...env, AGENT_BRIDGE_DB: env.AGENT_BRIDGE_DB.replace(/bridge\.db$/, `fresh-start-${round}.db`) };
+          const openAt = Date.now() + 1500; // every process opens the brand-new mailbox at the same moment
+          const res = await Promise.all(
+            names.map((n, i) =>
+              worker({ ...fresh, AGENT_NAME: n }, "send", { to: names[(i + 1) % names.length], body: `hi from ${n}`, openAt })
+            )
+          );
+          assert.equal(res.flat().length, 12, `round ${round}`);
+        }
       });
     }
 

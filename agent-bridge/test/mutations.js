@@ -188,8 +188,12 @@ const MUTATIONS = [
   end if;`, replace: `  null;`, suite: R1 },
 ];
 
+// Optional: node test/mutations.js "<part of a name>" ... runs only matching mutations.
+const only = process.argv.slice(2);
+const selected = only.length ? MUTATIONS.filter((m) => only.some((o) => m.name.includes(o))) : MUTATIONS;
+
 let survived = 0;
-for (const m of MUTATIONS) {
+for (const m of selected) {
   const path = ROOT + m.file;
   const original = readFileSync(path, "utf8");
   if (!original.includes(m.find)) {
@@ -220,5 +224,5 @@ for (const m of MUTATIONS) {
     writeFileSync(path, original);
   }
 }
-console.log(`\n${MUTATIONS.length - survived}/${MUTATIONS.length} mutations killed`);
+console.log(`\n${selected.length - survived}/${selected.length} mutations killed`);
 process.exit(survived ? 1 : 0);

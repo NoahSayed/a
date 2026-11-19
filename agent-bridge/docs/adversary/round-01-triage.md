@@ -10,8 +10,8 @@ Possible outcomes for each finding:
 - **ACCEPTED**: a known limit, with the reason.
 
 The regression tests are in [`test/regressions-r1.js`](../../test/regressions-r1.js). Run on the code the round attacked, they scored
-**0 of 26**. With the fixes they score **29 of 29**: the 26, plus three added afterwards (a raw-SQL subject check, a daily byte budget,
-and the R1-08 lock test rewritten to lock a fresh database). The mutation results are in [TESTING.md](../TESTING.md#mutation-testing).
+**0 of 26**. With the fixes they score **29 of 29**: the 26, plus three added while fixing (the daily byte budget on each backend and a raw-SQL subject check).
+The R1-08 lock test was also rewritten to lock a fresh database, and the sender-filter test was strengthened after mutation testing. The mutation results are in [TESTING.md](../TESTING.md#mutation-testing).
 
 | id | severity | outcome | what changed | test |
 |---|---|---|---|---|

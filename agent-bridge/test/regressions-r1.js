@@ -119,6 +119,10 @@ for (const make of [sqliteBackend, supabaseLocalBackend]) {
     });
 
     await test("R1-03 check_inbox can filter by sender so spam can't bury a real message", async () => {
+      // other unread mail must be waiting too, or the filter has nothing to filter out
+      const bob = await storeFor(b, "bob");
+      await bob.identify();
+      for (let i = 0; i < 3; i++) await bob.send({ to: N("carol"), body: `spam ${i} from bob`, type: "fyi" });
       const alice = await storeFor(b, "alice");
       await alice.identify();
       await alice.send({ to: N("carol"), body: "the real request", type: "request" });
@@ -127,7 +131,9 @@ for (const make of [sqliteBackend, supabaseLocalBackend]) {
       assert.equal(r.isError, false, r.text);
       assert.match(r.text, /the real request/);
       assert.doesNotMatch(r.text, /spam \d+/);
+      assert.match((await carol.call("check_inbox", { mark_read: false })).text, /spam 0 from bob/, "bob's mail must still be unread");
       await carol.close();
+      await (await storeFor(b, "carol")).inbox({ limit: 100 });
     });
 
     await test("R1-03 a daily byte budget per sender is enforced (and adjustable)", async () => {

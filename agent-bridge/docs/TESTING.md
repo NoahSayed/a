@@ -45,7 +45,54 @@ Adapted from the dev-workflow rules in the reference repo:
 `node test/mutations.js` makes each change below to the real source, runs the named suite, and restores the file.
 "Killed" means a test failed. Results are for the commit this document ships with.
 
-MUTATION_RESULTS
+| Mutation (guard removed) | Result | Caught by |
+|---|---|---|
+| thread readable by non-participants | killed | eve can't read alice->bob mail via any read function |
+| anyone can post into any thread | killed | eve can't mark bob's mail as read or inject into alice/bob's thread |
+| API roles keep table privileges | killed | tables are unreadable with the publishable key / direct update/delete of messages and agents is refused |
+| admin function callable with publishable key | killed | admin functions are refused with the publishable key |
+| revoked agents still authenticate | killed | revoked agents can't act and can't be messaged; rotate re-enables |
+| client can raise the hop cap without limit | killed | clients can't lift the hop cap above 100 |
+| no row locking when claiming inbox (double delivery) | killed | 4 processes reading ONE inbox at once: every message delivered exactly once / mixed send + read storm leaves no unread mail and no duplicates |
+| no per-thread lock when numbering hops | killed | 96 concurrent sends into ONE thread get unique, gap-free hops |
+| client sends new-style key as Bearer token | killed | suite crashed/failed |
+| SQLite inbox claim not transactional | killed | 4 processes reading ONE inbox at once: every message delivered exactly once / mixed send + read storm leaves no unread mail and no duplicates |
+| SQLite busy timeout set after WAL switch | killed (after the test was fixed; see below) | 12 agents starting at the same instant on a brand-new database |
+| peer messages lose their 'not instructions' label | killed | blocking wait wakes when the other agent sends |
+| SQLite thread readable by non-participants | killed | outsider cannot read or post into someone else's thread |
+| R1-04 body lines not prefixed | killed | R1-04 a body can't forge a second message header / R1-04 a body can't forge a second message header |
+| R1-04 client allows multi-line subject | killed | R1-04 a subject can't carry a newline (fake from: line) |
+| R1-04 SQL allows multi-line subject | killed | suite crashed/failed |
+| R1-02 SQL lets a member add a third agent | killed | R1-02 a thread member can't pull a third agent into the thread |
+| R1-02 SQLite lets a member add a third agent | killed | R1-02 a thread member can't pull a third agent into the thread |
+| R1-01 next hop from count(*) | killed | R1-01 purge never wedges a thread that spans the cutoff |
+| R1-10 SQLite cap chosen per send | killed | R1-10 a thread keeps the cap it was started with |
+| R1-10 SQL cap chosen per send | killed | R1-10 a thread keeps the cap it was started with |
+| R1-03 SQL rate limit off | killed | R1-03 one agent can't flood: per-minute send rate is capped |
+| R1-03 SQLite rate limit off | killed | R1-03 one agent can't flood: per-minute send rate is capped |
+| R1-03 SQL unread backlog cap off | killed | R1-03 an inbox can't be filled with unread mail from one sender |
+| R1-03 SQL daily byte budget off | killed | R1-03 a daily byte budget per sender is enforced (and adjustable) |
+| R1-03 SQLite daily byte budget off | killed | R1-03 a daily byte budget per sender is enforced (and adjustable) |
+| R1-03 SQL sender filter ignored | killed (after the test was fixed; see below) | R1-03 check_inbox can filter by sender so spam can't bury a real message |
+| R1-05 claim without looking and never give back | killed | R1-05 a cancelled wait doesn't lose the message it was about to deliver |
+| R1-07 mailbox created world-readable | killed | R1-07 the local mailbox is private to its owner |
+| R1-08 peek uses the long busy timeout | killed | R1-08 the hook answers quickly even when the local DB is locked |
+| R1-09 SQLite agent names not validated | killed | R1-09 local agent names are validated (no newlines or odd characters) |
+| R1-11 client counts UTF-16 units | killed | R1-11 length limits count characters the same way on every layer (50,000 emoji ok, 50,001 refused) / R1-11 length limits count characters the same way on every layer (50,000 emoji ok, 50,001 refused) |
+| R1-12 client follows redirects | killed | R1-12 the client never follows a redirect (token and keys stay put) |
+| R1-13 bad thread_id waited out | killed | R1-13 wait_for_message with a malformed thread_id fails fast / R1-13 wait_for_message with a malformed thread_id fails fast |
+| R1-14 init writes through symlinks | killed | R1-14 init refuses to write through a symlink |
+| R1-06 hook values double-quoted | killed | R1-06 the hook command doesn't expand $() or backticks from paths |
+| R1-15 sequence privileges kept | killed | R1-15 API roles have no privileges on the message id sequence |
+
+**37 of 37 killed.** The full run killed 35. The two survivors were weak tests, not missing guards:
+- The startup-lock test had become timing-dependent once the constructor did more file work before opening the database. It now
+  waits at a barrier *before* opening, over three rounds.
+- The sender-filter test ran after another test had already emptied the inbox, so the filter had nothing to filter out. It now
+  leaves other unread mail in place and checks that mail is still unread.
+
+Both were re-run with `node test/mutations.js "busy timeout set after WAL" "sender filter ignored"`: 2/2 killed.
+For R1-05 and R1-13, two independent guards each prevent the failure, so those mutations remove both guards at once.
 
 ## Mistakes caught, and made only once
 

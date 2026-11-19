@@ -4,6 +4,8 @@ import { createStore } from "../store.js";
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const job = JSON.parse(input);
+// Barrier before the mailbox is even opened: the startup race is in opening it.
+if (job.openAt) await new Promise((r) => setTimeout(r, Math.max(0, job.openAt - Date.now())));
 const store = await createStore();
 await store.identify();
 // Start barrier: every worker in a batch begins at the same wall-clock moment.
