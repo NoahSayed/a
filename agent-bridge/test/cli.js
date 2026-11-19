@@ -71,6 +71,22 @@ try {
     assert.equal(hooks.length, 1);
   });
 
+  await test("upgrading replaces a stage-1 hook (old double-quoted format) instead of adding a second", async () => {
+    const r = repo("local-upgrade");
+    mkdirSync(join(r, ".claude"), { recursive: true });
+    const old = `AGENT_BRIDGE_DB="/x/bridge.db" "${process.execPath}" "/old/agent-bridge/cli.js" peek alpha`;
+    const other = { hooks: [{ type: "command", command: "echo unrelated" }] };
+    writeFileSync(
+      join(r, ".claude", "settings.local.json"),
+      JSON.stringify({ hooks: { UserPromptSubmit: [other, { hooks: [{ type: "command", command: old }] }] } })
+    );
+    await runCli(["init", r, "alpha", "--hook"], localEnv);
+    const hooks = readJson(join(r, ".claude", "settings.local.json")).hooks.UserPromptSubmit;
+    assert.equal(hooks.length, 2, JSON.stringify(hooks));
+    assert.deepEqual(hooks[0], other, "an unrelated hook was touched");
+    assert.ok(!JSON.stringify(hooks).includes("/old/agent-bridge"));
+  });
+
   await test("init rejects bad names and missing repos", async () => {
     assert.notEqual((await runCli(["init", repo("local-x"), "Bad Name"], localEnv)).code, 0);
     assert.notEqual((await runCli(["init", join(tmp, "nope"), "ok"], localEnv)).code, 0);

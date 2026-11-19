@@ -28,6 +28,7 @@ for (const make of await backendsFromArgs()) {
   const b = await make();
   console.log(`\n=== concurrency: ${b.name} (${WORKERS} processes x ${PER_WORKER}) ===`);
   const N = b.nameOf;
+  let restoreLimits = null;
   try {
     if (!b.remote) {
       await test("12 agents starting at the same instant on a brand-new database", async () => {
@@ -44,6 +45,8 @@ for (const make of await backendsFromArgs()) {
     }
 
     for (const a of ["ping", "pong", "reader"]) await b.addAgent(a);
+    // load/attack tests send far faster than a real agent; the abuse limits have their own tests
+    restoreLimits = await b.setLimits({ ratePerMinute: 10000, maxUnreadPerSender: 100000 });
 
     // the server caps a thread at 100 messages: seed + WORKERS * perThread must stay <= 100
     const perThread = Math.min(PER_WORKER, Math.floor(99 / WORKERS));
@@ -108,6 +111,7 @@ for (const make of await backendsFromArgs()) {
       assert.equal(new Set(ids).size, ids.length);
     });
   } finally {
+    if (restoreLimits) await restoreLimits().catch(() => {});
     await b.cleanup();
   }
 }

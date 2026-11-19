@@ -31,8 +31,11 @@ for (const make of await backendsFromArgs(args.length ? args : ["supabase-local"
   const rpc = (fn, body, opts) => http("POST", `rpc/${fn}`, { ...opts, body });
   const denied = (r) => [401, 403, 404].includes(r.status);
 
+  let restoreLimits = null;
   try {
     for (const a of ["alice", "bob", "eve"]) await b.addAgent(a);
+    // load/attack tests send far faster than a real agent; the abuse limits have their own tests
+    restoreLimits = await b.setLimits({ ratePerMinute: 10000, maxUnreadPerSender: 100000 });
     const T = b.tokens;
     const first = await rpc("bridge_send", { p_token: T.alice, p_to: N("bob"), p_body: "secret plans for bob" });
     assert.equal(first.status, 200, first.text);
@@ -229,6 +232,7 @@ for (const make of await backendsFromArgs(args.length ? args : ["supabase-local"
       });
     }
   } finally {
+    if (restoreLimits) await restoreLimits().catch(() => {});
     await b.cleanup();
   }
 }

@@ -28,6 +28,9 @@ function statusFor(code, role) {
 
 export async function startFakePostgrest({ connectionString }) {
   const pool = new pg.Pool({ connectionString, max: 20 });
+  // Teardown drops the database WITH (FORCE), which terminates idle pooled connections (57P01).
+  // pg emits that on the pool; unhandled, it crashed the test process after all tests had passed.
+  pool.on("error", () => {});
   const stats = { requests: 0 };
 
   const send = (res, status, body) => {
@@ -57,8 +60,10 @@ export async function startFakePostgrest({ connectionString }) {
 
   const server = http.createServer(async (req, res) => {
     stats.requests++;
-    let raw = "";
-    for await (const chunk of req) raw += chunk;
+    // Decode once: concatenating chunks as strings splits multi-byte characters at chunk edges.
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString("utf8");
     const role = ROLE_FOR_KEY[req.headers.apikey];
     if (!role) return send(res, 401, { message: "Invalid API key", hint: "Double check your Supabase `anon` or `service_role` API key." });
     const auth = req.headers.authorization;

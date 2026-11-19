@@ -15,12 +15,22 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export async function sqliteBackend() {
   const dir = mkdtempSync(join(tmpdir(), "agent-bridge-test-"));
   const db = join(dir, "bridge.db");
+  let limitEnv = {};
   return {
     name: "sqlite",
     remote: false,
     nameOf: (a) => a,
-    envFor: (agent) => ({ AGENT_BRIDGE_BACKEND: "sqlite", AGENT_NAME: agent, AGENT_BRIDGE_DB: db }),
+    envFor: (agent) => ({ AGENT_BRIDGE_BACKEND: "sqlite", AGENT_NAME: agent, AGENT_BRIDGE_DB: db, ...limitEnv }),
     addAgent: async () => {},
+    // Raise or lower the per-agent abuse limits for this backend; returns a function that restores them.
+    setLimits: async ({ ratePerMinute, maxUnreadPerSender, maxBytesPerDay }) => {
+      const before = limitEnv;
+      limitEnv = { ...limitEnv };
+      if (ratePerMinute != null) limitEnv.AGENT_BRIDGE_RATE_PER_MIN = String(ratePerMinute);
+      if (maxUnreadPerSender != null) limitEnv.AGENT_BRIDGE_MAX_UNREAD = String(maxUnreadPerSender);
+      if (maxBytesPerDay != null) limitEnv.AGENT_BRIDGE_MAX_BYTES_PER_DAY = String(maxBytesPerDay);
+      return async () => (limitEnv = before);
+    },
     cleanup: async () => rmSync(dir, { recursive: true, force: true }),
   };
 }
@@ -46,6 +56,16 @@ function supabaseCommon({ name, url, publishable, admin, suffix }) {
     addAgent: async (agent) => {
       tokens[agent] = await admin.createAgent(nameOf(agent), `test agent ${agent}`);
     },
+    setLimits: async (limits) => {
+      const before = await admin.setLimits({});
+      await admin.setLimits(limits);
+      return async () =>
+        admin.setLimits({
+          ratePerMinute: before.rate_per_minute,
+          maxUnreadPerSender: before.max_unread_per_sender,
+          maxBytesPerDay: before.max_bytes_per_day,
+        });
+    },
   };
 }
 
@@ -56,7 +76,8 @@ export async function supabaseLocalBackend() {
   const dbName = `bridge_test_${randomBytes(4).toString("hex")}`;
   const adminClient = new pg.Client({ connectionString: base });
   await adminClient.connect();
-  await adminClient.query(`create database ${dbName}`);
+  // Supabase databases are UTF8; a SQL_ASCII test database counts bytes, not characters (R1-11).
+  await adminClient.query(`create database ${dbName} template template0 encoding 'UTF8'`);
   const dbUrl = base.replace(/\/[^/]*$/, `/${dbName}`);
   const c = new pg.Client({ connectionString: dbUrl });
   await c.connect();
@@ -66,6 +87,7 @@ export async function supabaseLocalBackend() {
   const api = await startFakePostgrest({ connectionString: dbUrl });
   const admin = new SupabaseAdmin({ url: api.url, secretKey: KEYS.secret });
   const b = supabaseCommon({ name: "supabase-local", url: api.url, publishable: KEYS.publishable, admin, suffix: "" });
+  api.pool.on("error", () => {});
   b.secret = KEYS.secret;
   b.pool = api.pool;
   b.cleanup = async () => {

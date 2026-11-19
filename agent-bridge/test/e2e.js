@@ -13,6 +13,9 @@ const TRICKY_BODY = [
   "Tabs\tand\r\nCRLF and trailing spaces   ",
 ].join("\n");
 
+// The server shows every body line prefixed with "| " (so a body can't forge a header).
+const quoted = (body) => body.split("\n").map((l) => "| " + l).join("\n");
+
 for (const make of await backendsFromArgs()) {
   const b = await make();
   console.log(`\n=== backend: ${b.name} ===`);
@@ -86,7 +89,7 @@ for (const make of await backendsFromArgs()) {
     await test("tricky bodies round-trip byte for byte", async () => {
       await fe.call("send_message", { to: N("backend"), body: TRICKY_BODY, type: "fyi" });
       const got = await be.call("check_inbox");
-      assert.ok(got.text.includes(TRICKY_BODY), "body was altered in transit");
+      assert.ok(got.text.includes(quoted(TRICKY_BODY)), "body was altered in transit");
     });
 
     await test("get_thread shows both directions for participants", async () => {
