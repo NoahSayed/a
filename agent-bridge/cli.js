@@ -1,123 +1,259 @@
 #!/usr/bin/env node
-// Human-side CLI for the bridge, plus a `peek` mode for a Claude Code hook.
-//
-//   node cli.js agents                      list connected agents
-//   node cli.js log [n]                     last n messages, all agents
-//   node cli.js tail                        follow new messages live
-//   node cli.js send <from> <to> <text...>  send a message as <from>
-//   node cli.js peek <agent>                print an "unread mail" note if any (for hooks)
+// agent-bridge CLI: set up repos, watch traffic, and (Supabase) manage agents.
+// Run with no arguments for help.
 
-import { BridgeStore } from "./store.js";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, resolveDbPath } from "./store.js";
 
-const store = new BridgeStore();
-const [cmd, ...args] = process.argv.slice(2);
+const HERE = fileURLToPath(new URL(".", import.meta.url));
+const HELP = `agent-bridge CLI
+
+Setup
+  init <repo> <name> ["desc"] [--hook] [--supabase] [--token-file <path>]
+                                  wire a repo's .mcp.json to the bridge (and optional hook)
+Watching (local: all traffic; Supabase: traffic of the agent whose token you use)
+  whoami | agents | log [n] | tail
+  send <to> <text...>             send as AGENT_NAME (local, default "human") or as the token's agent
+  peek [name]                     print an "unread mail" note if any (used by the hook)
+Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
+  add-agent <name> ["desc"] [--save]   register an agent, print its token (--save: store it locally)
+  rotate-token <name> [--save]         issue a new token (old one stops working)
+  revoke-agent <name>                  disable an agent
+  purge [days=30]                      delete messages older than N days
+  save-token <name>                    read a token from stdin into ~/.agent-bridge/tokens/<name>.token
+
+Environment: AGENT_BRIDGE_DB (local), SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY,
+AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE (Supabase). See README.md.`;
+
+const argv = process.argv.slice(2);
+const flags = new Set(argv.filter((a) => a.startsWith("--")));
+const flagValue = (name) => {
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && argv[i - 1] === "--token-file"));
+const [cmd, ...args] = positional;
+
+const tokenPath = (name) => expandHome(`~/.agent-bridge/tokens/${name}.token`);
+function saveToken(name, token) {
+  const p = tokenPath(name);
+  mkdirSync(expandHome("~/.agent-bridge/tokens"), { recursive: true, mode: 0o700 });
+  writeFileSync(p, token + "\n", { mode: 0o600 });
+  chmodSync(p, 0o600);
+  return p;
+}
 
 const line = (m) =>
-  `#${m.id} [${m.created_at.slice(11, 19)}] ${m.from_agent} -> ${m.to_agent} (${m.type}, hop ${m.hop}, thread ${m.thread_id.slice(0, 8)})` +
-  `${m.read_at ? "" : " *unread*"}\n    ${m.subject ? m.subject + ": " : ""}${m.body.replace(/\n/g, "\n    ")}`;
+  `#${m.id} [${String(m.created_at).slice(11, 19)}] ${m.from_agent} -> ${m.to_agent} ` +
+  `(${m.type}, hop ${m.hop}, thread ${String(m.thread_id).slice(0, 8)})${m.read_at ? "" : " *unread*"}\n` +
+  `    ${m.subject ? m.subject + ": " : ""}${m.body.replace(/\n/g, "\n    ")}`;
 
-switch (cmd) {
-  case "agents":
-    console.table(store.listAgents());
-    break;
+// Local mode shows every message on the bridge; Supabase only shows the token's own traffic.
+const listRecent = (store, opts) => (store.allRecent ? store.allRecent(opts) : store.recent(opts));
 
-  case "log":
-    store.recent(Number(args[0] || 20)).forEach((m) => console.log(line(m)));
-    break;
-
-  case "tail": {
-    let last = store.recent(1)[0]?.id ?? 0;
-    console.log(`watching ${store.dbPath} (ctrl-c to stop)`);
-    setInterval(() => {
-      const rows = store.db.prepare(`SELECT * FROM messages WHERE id > ? ORDER BY id`).all(last);
-      for (const m of rows) {
-        console.log(line(m));
-        last = m.id;
-      }
-    }, 1000);
-    break;
-  }
-
-  case "send": {
-    const [from, to, ...rest] = args;
-    if (!from || !to || !rest.length) {
-      console.error("usage: send <from> <to> <text...>");
-      process.exit(1);
-    }
-    const m = store.send({ from, to, body: rest.join(" "), type: "request" });
-    console.log(`sent #${m.id} (thread ${m.thread_id})`);
-    break;
-  }
-
-  case "peek": {
-    // Used as a Claude Code UserPromptSubmit hook: stdout is added to the agent's context.
-    const agent = args[0] || process.env.AGENT_NAME;
-    if (!agent) process.exit(0);
-    const summary = store.unreadSummary(agent);
-    if (summary.length) {
-      const who = summary.map((s) => `${s.n} from ${s.from_agent}`).join(", ");
-      console.log(`[agent-bridge] You have unread bridge messages (${who}). Call check_inbox when relevant.`);
-    }
-    break;
-  }
-
-  case "init": {
-    // Wire a repo up to the bridge: merges a "bridge" server into <repo>/.mcp.json and
-    // (with --hook) adds the unread-mail hook to <repo>/.claude/settings.local.json.
-    const flags = args.filter((a) => a.startsWith("--"));
-    const [repo, name, ...descParts] = args.filter((a) => !a.startsWith("--"));
-    if (!repo || !name) {
-      console.error('usage: init <repo-path> <agent-name> ["description"] [--hook]');
-      process.exit(1);
-    }
-    const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import("node:fs");
-    const { resolve, join } = await import("node:path");
-    const { fileURLToPath } = await import("node:url");
-    const repoDir = resolve(repo);
-    if (!existsSync(repoDir)) {
-      console.error(`no such directory: ${repoDir}`);
-      process.exit(1);
-    }
-    const here = fileURLToPath(new URL(".", import.meta.url));
-    const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {});
-
-    const mcpPath = join(repoDir, ".mcp.json");
-    const mcp = readJson(mcpPath);
-    mcp.mcpServers ??= {};
-    const env = { AGENT_NAME: name, AGENT_BRIDGE_DB: store.dbPath };
-    const prevDesc = mcp.mcpServers.bridge?.env?.AGENT_DESCRIPTION;
-    if (descParts.length) env.AGENT_DESCRIPTION = descParts.join(" ");
-    else if (prevDesc) env.AGENT_DESCRIPTION = prevDesc;
-    mcp.mcpServers.bridge = { command: process.execPath, args: [join(here, "server.js")], env };
-    writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + "\n");
-    console.log(`wrote ${mcpPath}  (agent "${name}", db ${store.dbPath})`);
-
-    if (flags.includes("--hook")) {
-      const settingsPath = join(repoDir, ".claude", "settings.local.json");
-      mkdirSync(join(repoDir, ".claude"), { recursive: true });
-      const settings = readJson(settingsPath);
-      settings.hooks ??= {};
-      settings.hooks.UserPromptSubmit ??= [];
-      const command = `"${process.execPath}" "${join(here, "cli.js")}" peek ${name}`;
-      const already = JSON.stringify(settings.hooks.UserPromptSubmit).includes("cli.js") &&
-        JSON.stringify(settings.hooks.UserPromptSubmit).includes(`peek ${name}`);
-      if (!already) {
-        settings.hooks.UserPromptSubmit.push({
-          hooks: [{ type: "command", command: `AGENT_BRIDGE_DB="${store.dbPath}" ${command}` }],
-        });
-      }
-      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-      console.log(`wrote ${settingsPath}  (unread-mail hook)`);
-    }
-    console.log(
-      "next: restart Claude Code in that repo and approve the 'bridge' MCP server.\n" +
-        "tip: .mcp.json now holds absolute paths for this machine; add it to .gitignore if you don't want to commit it."
-    );
-    break;
-  }
-
-  default:
-    console.log(
-      "commands: init <repo> <name> [desc] [--hook] | agents | log [n] | tail | send <from> <to> <text...> | peek <agent>"
-    );
+async function admin() {
+  const { SupabaseAdmin } = await import("./stores/supabase.js");
+  return new SupabaseAdmin({
+    url: process.env.SUPABASE_URL,
+    secretKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
+  });
 }
+
+async function main() {
+  switch (cmd) {
+    case "whoami": {
+      const store = await createStore({ agentName: process.env.AGENT_NAME || "human" });
+      console.log(JSON.stringify({ ...(await store.whoami()), backend: store.describe() }, null, 2));
+      break;
+    }
+
+    case "agents": {
+      const store = await createStore({ agentName: process.env.AGENT_NAME || "human" });
+      console.table(await store.listAgents());
+      break;
+    }
+
+    case "log": {
+      const store = await createStore({ agentName: process.env.AGENT_NAME || "human" });
+      (await listRecent(store, { limit: Number(args[0] || 20) })).forEach((m) => console.log(line(m)));
+      break;
+    }
+
+    case "tail": {
+      const store = await createStore({ agentName: process.env.AGENT_NAME || "human" });
+      let last = (await listRecent(store, { limit: 1 }))[0]?.id ?? 0;
+      console.log(`watching ${store.describe()} (ctrl-c to stop)`);
+      for (;;) {
+        try {
+          for (const m of await listRecent(store, { limit: 100, afterId: last })) {
+            console.log(line(m));
+            last = m.id;
+          }
+        } catch (e) {
+          console.error(`(poll failed: ${e.message})`);
+        }
+        await new Promise((r) => setTimeout(r, store.pollIntervalMs));
+      }
+    }
+
+    case "send": {
+      const [to, ...rest] = args;
+      if (!to || !rest.length) throw new Error("usage: send <to> <text...>");
+      const store = await createStore({ agentName: process.env.AGENT_NAME || "human" });
+      await store.identify();
+      const m = await store.send({ to, body: rest.join(" "), type: "request" });
+      console.log(`sent #${m.id} as ${m.from_agent} (thread ${m.thread_id})`);
+      break;
+    }
+
+    case "peek": {
+      // Used as a Claude Code UserPromptSubmit hook: stdout is added to the agent's context.
+      // Never fails loudly: a broken bridge must not block the user's prompt.
+      try {
+        const agent = args[0] || process.env.AGENT_NAME;
+        if (backendFromEnv() === "sqlite" && !agent) return;
+        const store = await createStore({ agentName: agent });
+        const summary = await Promise.race([
+          store.unreadSummary(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000)),
+        ]);
+        if (summary.length) {
+          const who = summary.map((s) => `${s.n} from ${s.from_agent}`).join(", ");
+          console.log(`[agent-bridge] You have unread bridge messages (${who}). Call check_inbox when relevant.`);
+        }
+      } catch (e) {
+        // stay silent so a broken bridge never blocks the prompt; AGENT_BRIDGE_DEBUG=1 shows why
+        if (process.env.AGENT_BRIDGE_DEBUG) console.error(`agent-bridge peek: ${e.message}`);
+      }
+      process.exit(0);
+    }
+
+    case "init": {
+      const [repo, name, ...descParts] = args;
+      if (!repo || !name) throw new Error('usage: init <repo-path> <agent-name> ["description"] [--hook] [--supabase]');
+      if (!AGENT_NAME_RE.test(name)) throw new Error("agent name: lowercase letters, digits, - and _ (max 40)");
+      const repoDir = resolve(repo);
+      if (!existsSync(repoDir)) throw new Error(`no such directory: ${repoDir}`);
+      const supabase = flags.has("--supabase");
+      const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {});
+
+      let env;
+      if (supabase) {
+        const url = process.env.SUPABASE_URL;
+        const key = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
+        if (!url || !key) throw new Error("--supabase needs SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in your shell.");
+        const tf = expandHome(flagValue("--token-file") || tokenPath(name));
+        if (!existsSync(tf)) {
+          throw new Error(
+            `no token file at ${tf}. Get a token with "add-agent ${name} --save" (admin) ` +
+              `or "save-token ${name}" (token from your admin), then re-run init.`
+          );
+        }
+        // Secrets stay out of the repo: .mcp.json only points at the token file.
+        env = {
+          AGENT_NAME: name,
+          AGENT_BRIDGE_BACKEND: "supabase",
+          SUPABASE_URL: url,
+          SUPABASE_PUBLISHABLE_KEY: key,
+          AGENT_BRIDGE_TOKEN_FILE: tf,
+        };
+      } else {
+        env = { AGENT_NAME: name, AGENT_BRIDGE_DB: resolveDbPath() };
+      }
+
+      const mcpPath = join(repoDir, ".mcp.json");
+      const mcp = readJson(mcpPath);
+      mcp.mcpServers ??= {};
+      const prevDesc = mcp.mcpServers.bridge?.env?.AGENT_DESCRIPTION;
+      if (descParts.length) env.AGENT_DESCRIPTION = descParts.join(" ");
+      else if (prevDesc) env.AGENT_DESCRIPTION = prevDesc;
+      mcp.mcpServers.bridge = { command: process.execPath, args: [join(HERE, "server.js")], env };
+      writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + "\n");
+      console.log(`wrote ${mcpPath}  (agent "${name}", ${supabase ? "supabase" : "local " + env.AGENT_BRIDGE_DB})`);
+
+      if (flags.has("--hook")) {
+        const settingsPath = join(repoDir, ".claude", "settings.local.json");
+        mkdirSync(join(repoDir, ".claude"), { recursive: true });
+        const settings = readJson(settingsPath);
+        settings.hooks ??= {};
+        settings.hooks.UserPromptSubmit ??= [];
+        const envPrefix = Object.entries(env)
+          .filter(([k]) => k !== "AGENT_DESCRIPTION")
+          .map(([k, v]) => `${k}="${v}"`)
+          .join(" ");
+        const command = `${envPrefix} "${process.execPath}" "${join(HERE, "cli.js")}" peek ${name}`;
+        settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter(
+          (h) => !JSON.stringify(h).includes("cli.js") || !JSON.stringify(h).includes(`peek ${name}`)
+        );
+        settings.hooks.UserPromptSubmit.push({ hooks: [{ type: "command", command, timeout: 10 }] });
+        writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+        console.log(`wrote ${settingsPath}  (unread-mail hook)`);
+      }
+      console.log(
+        "next: restart Claude Code in that repo and approve the 'bridge' MCP server.\n" +
+          "tip: .mcp.json now holds absolute paths for this machine; add it to .gitignore if you don't want to commit it."
+      );
+      break;
+    }
+
+    case "add-agent": {
+      const [name, ...descParts] = args;
+      if (!name || !AGENT_NAME_RE.test(name)) throw new Error("usage: add-agent <name> [desc] [--save]  (name: a-z 0-9 - _)");
+      const token = await (await admin()).createAgent(name, descParts.join(" ") || null);
+      if (flags.has("--save")) console.log(`registered "${name}"; token saved to ${saveToken(name, token)}`);
+      else console.log(`registered "${name}". Token (shown once, give it only to that agent's machine):\n${token}`);
+      break;
+    }
+
+    case "rotate-token": {
+      const [name] = args;
+      if (!name) throw new Error("usage: rotate-token <name> [--save]");
+      const token = await (await admin()).rotateToken(name);
+      if (flags.has("--save")) console.log(`new token for "${name}" saved to ${saveToken(name, token)}`);
+      else console.log(`new token for "${name}" (old one no longer works):\n${token}`);
+      break;
+    }
+
+    case "revoke-agent": {
+      const [name] = args;
+      if (!name) throw new Error("usage: revoke-agent <name>");
+      await (await admin()).revokeAgent(name);
+      console.log(`revoked "${name}"`);
+      break;
+    }
+
+    case "purge": {
+      const days = Number(args[0] || 30);
+      if (!(days >= 0)) throw new Error("usage: purge [days]");
+      console.log(`deleted ${await (await admin()).purge(days)} message(s) older than ${days} day(s)`);
+      break;
+    }
+
+    case "save-token": {
+      const [name] = args;
+      if (!name || !AGENT_NAME_RE.test(name)) throw new Error("usage: save-token <name>  (paste the token, then Enter)");
+      let input = "";
+      for await (const chunk of process.stdin) {
+        input += chunk;
+        if (input.includes("\n")) break;
+      }
+      const token = input.trim();
+      if (!/^abt_[0-9a-f]{64}$/.test(token)) throw new Error("that doesn't look like an agent-bridge token (abt_...)");
+      console.log(`saved to ${saveToken(name, token)}`);
+      break;
+    }
+
+    default:
+      console.log(HELP);
+  }
+}
+
+main().then(
+  () => process.exit(0),
+  (e) => {
+    console.error(`error: ${e.message}`);
+    process.exit(1);
+  }
+);
