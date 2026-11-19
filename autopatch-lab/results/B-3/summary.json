@@ -1,0 +1,82 @@
+{
+  "run": "B-3",
+  "arm": "B",
+  "minutes": 0.5,
+  "results": {
+    "minimist": {
+      "outcome": "bumped, tests pass"
+    },
+    "lodash": {
+      "outcome": "bumped, tests pass"
+    },
+    "marked": {
+      "outcome": "bumped + code repaired, tests pass",
+      "repairedBy": "claude-sonnet (single headless session)"
+    }
+  },
+  "gate": {
+    "testsPass": true,
+    "vulnsCleared": true,
+    "onlyAllowedFilesChanged": true,
+    "noDependencySetChange": true,
+    "scriptsUnchanged": true
+  },
+  "gatePass": true,
+  "hidden": {
+    "pass": 9,
+    "fail": 0,
+    "failed": []
+  },
+  "repairs": [
+    {
+      "pkg": "marked",
+      "by": "claude-sonnet (single headless session)",
+      "costUsd": 0.0645776,
+      "turns": 4,
+      "ms": 9852,
+      "isError": false,
+      "note": "I changed `src/app.js` line 9 from `marked(md)` to `marked.parse(md)`. The upgraded `marked` no longer exports a callable function, which caused the \"marked is not a function\" error. `npm test` now passes all 3 tests.\n\n`parse` is still synchronous and returns a string, so `renderMarkdown` keeps the same public API. I didn't touch the tests, `package.json` or the dependencies."
+    }
+  ],
+  "aiCostUsd": 0.0646,
+  "review": {
+    "verdict": "approve",
+    "reasons": [
+      "package.json changes are limited to the three version bumps (lodash 4.17.20→4.18.0, marked 2.0.0→4.0.10, minimist 1.2.5→1.2.6). No dependencies are added or removed and no scripts change, which matches the gate.",
+      "src/app.js changes one line: marked(md) becomes marked.parse(md). marked 4 exports parse, so this fits the major-version bump. No unrelated code is touched.",
+      "The lockfile diff was excluded from this review, so the resolved versions and integrity hashes were not checked. A human should confirm them before merge.",
+      "marked 2→4 is a major bump with possible rendering-output differences. The PR relies on the test suite passing and on a code repair from a headless session, and gives no output-diff evidence. Since marked is marked not auto-merge eligible, a human should check rendered output.",
+      "The advisory IDs and CVSS details (including the lodash 4.18.0 target and CVE-2026-4800) were not independently verified. The diff does not depend on them."
+    ],
+    "costUsd": 0.0029444599999999994
+  },
+  "policy": [
+    {
+      "pkg": "minimist",
+      "lane": "fast-track",
+      "why": "critical and reachable from app code",
+      "fix": "1.2.6",
+      "major": false,
+      "flags": [],
+      "autoMergeEligible": true
+    },
+    {
+      "pkg": "lodash",
+      "lane": "patch-now",
+      "why": "high and reachable from app code",
+      "fix": "4.18.0",
+      "major": false,
+      "flags": [],
+      "autoMergeEligible": true
+    },
+    {
+      "pkg": "marked",
+      "lane": "patch-now",
+      "why": "high and reachable from app code",
+      "fix": "4.0.10",
+      "major": true,
+      "flags": [],
+      "autoMergeEligible": false
+    }
+  ]
+}

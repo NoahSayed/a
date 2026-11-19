@@ -1,0 +1,42 @@
+{
+  "run": "D-2",
+  "arm": "D",
+  "minutes": 0.5,
+  "gate": {
+    "testsPass": true,
+    "vulnsCleared": true,
+    "onlyAllowedFilesChanged": true,
+    "noDependencySetChange": true,
+    "scriptsUnchanged": true
+  },
+  "gatePass": true,
+  "hidden": {
+    "pass": 9,
+    "fail": 0,
+    "failed": []
+  },
+  "repairs": [
+    {
+      "by": "claude-sonnet (naive, no pipeline)",
+      "costUsd": 0.0747636,
+      "turns": 6,
+      "ms": 17382,
+      "isError": false,
+      "note": "`npm audit` now reports 0 vulnerabilities, and all 3 tests pass.\n\nI upgraded `lodash`, `marked` and `minimist` to their latest versions. The `marked` upgrade was a major-version jump and broke the old `marked(md)` call. I changed it to `marked.parse(md)` in `src/app.js`, which fixed the failing test.\n\nI haven't committed anything."
+    }
+  ],
+  "aiCostUsd": 0.0748,
+  "review": {
+    "verdict": "reject",
+    "reasons": [
+      "The marked upgrade jumps from 2.0.0 to ^18.2.1, a 16-major-version change. The PR only mentions one breaking change (marked(md) to marked.parse(md)) and gives no review of other changes in marked's options, renderer, or output between those versions.",
+      "renderMarkdown() handles user-supplied markdown, so any change in marked's HTML output or sanitization behaviour is a security-relevant behaviour change. The PR does not address this.",
+      "The source change in src/app.js was made to get a failing test passing. The PR does not say whether the test or its expectations were changed, and does not show the test diff.",
+      "The PR's claims of 'npm audit reports 0 vulnerabilities' and 'all 3 tests pass' come with no command output, so they cannot be checked from the description.",
+      "package.json changes exact pins to caret ranges (lodash ^4.18.1, marked ^18.2.1, minimist ^1.2.8). This loosens the dependency policy, and the lodash 4.18.x version in particular should be confirmed to exist. The lockfile was excluded from the diff, so the resolved versions and any transitive changes were not reviewed.",
+      "The PR does not state which package versions the lockfile resolves to, so the actual dependency change is unverified."
+    ],
+    "costUsd": 0.006313279999999999
+  },
+  "policy": []
+}

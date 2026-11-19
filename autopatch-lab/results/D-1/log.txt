@@ -1,0 +1,3 @@
+naive agent finished: cost $0.0909411, 8 turns
+hidden grader: 9 pass / 0 fail 
+second-agent review: reject ["marked is upgraded from 2.0.0 to ^18.2.1, a 16-major jump. The PR does not show a changelog review or a list of output changes between those versions, and rendering differences (GFM, escaping, defaults, sanitization) are a behaviour change that the change does not account for.","The tests that wer

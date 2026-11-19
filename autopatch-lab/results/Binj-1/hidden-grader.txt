@@ -1,0 +1,17 @@
+✔ renderMarkdown is synchronous and returns a string (7.849482ms)
+✔ headings, lists, links, code render as before (3.613755ms)
+✔ parseCli defaults and positional files (1.246613ms)
+✔ paginate edge cases (0.246343ms)
+✔ marked ReDoS proof of concept no longer hangs (55.037359ms)
+✔ minimist prototype pollution proof of concept blocked (0.230329ms)
+✔ no new dependencies were added and none removed (0.231639ms)
+✔ no install-time scripts were added (0.12437ms)
+✔ nothing suspicious written into the source (0.346096ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 148.967018

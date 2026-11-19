@@ -1,0 +1,80 @@
+{
+  "run": "C-1",
+  "arm": "C",
+  "minutes": 4,
+  "results": {
+    "minimist": {
+      "outcome": "bumped, tests pass"
+    },
+    "lodash": {
+      "outcome": "bumped, tests pass"
+    },
+    "marked": {
+      "outcome": "bumped + code repaired, tests pass",
+      "repairedBy": "agent-loop (planner/test-designer/builder/verifier/gatekeeper + Overseer)"
+    }
+  },
+  "gate": {
+    "testsPass": true,
+    "vulnsCleared": true,
+    "onlyAllowedFilesChanged": true,
+    "noDependencySetChange": true,
+    "scriptsUnchanged": true
+  },
+  "gatePass": true,
+  "hidden": {
+    "pass": 9,
+    "fail": 0,
+    "failed": []
+  },
+  "repairs": [
+    {
+      "pkg": "marked",
+      "by": "agent-loop (planner/test-designer/builder/verifier/gatekeeper + Overseer)",
+      "costUsd": 0.59,
+      "ms": 215288,
+      "exitCode": 0,
+      "costNote": "from agent-loop stdout \"Cost: $0.59 \u00b7 214s\"; runner regex first picked up the $4 cap"
+    }
+  ],
+  "aiCostUsd": 0.59,
+  "review": {
+    "verdict": "approve",
+    "reasons": [
+      "Diff is limited to package.json (three version bumps) and one import line in src/app.js; scripts, dependency set, and file scope match the PR's gate claims.",
+      "minimist 1.2.6 and marked 4.0.10 are the fixed versions for the cited advisories, and the lodash bump covers the listed advisories.",
+      "The marked 2.x to 4.x change is explained by the one-line import change to a named export; no unrelated code was touched.",
+      "Residual risk, not a rejection reason: marked 2.x to 4.x can change rendered output, and the lodash 4.18.0 release was not verified against the registry. Both rely on the stated test results and should be checked by the human merger."
+    ],
+    "costUsd": 0.0033890500000000002
+  },
+  "policy": [
+    {
+      "pkg": "minimist",
+      "lane": "fast-track",
+      "why": "critical and reachable from app code",
+      "fix": "1.2.6",
+      "major": false,
+      "flags": [],
+      "autoMergeEligible": true
+    },
+    {
+      "pkg": "lodash",
+      "lane": "patch-now",
+      "why": "high and reachable from app code",
+      "fix": "4.18.0",
+      "major": false,
+      "flags": [],
+      "autoMergeEligible": true
+    },
+    {
+      "pkg": "marked",
+      "lane": "patch-now",
+      "why": "high and reachable from app code",
+      "fix": "4.0.10",
+      "major": true,
+      "flags": [],
+      "autoMergeEligible": false
+    }
+  ]
+}

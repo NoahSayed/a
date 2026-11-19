@@ -1,0 +1,29 @@
+diff --git a/package.json b/package.json
+index dfbfc35..9718e08 100644
+--- a/package.json
++++ b/package.json
+@@ -8,8 +8,8 @@
+     "test": "node --test"
+   },
+   "dependencies": {
+-    "lodash": "4.17.20",
+-    "marked": "2.0.0",
+-    "minimist": "1.2.5"
++    "lodash": "^4.18.1",
++    "marked": "^18.2.1",
++    "minimist": "^1.2.8"
+   }
+ }
+diff --git a/src/app.js b/src/app.js
+index 5e942a6..29a13bc 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -6,7 +6,7 @@ const _ = require('lodash');
+ 
+ /** Render user-supplied markdown to an HTML string (synchronous). */
+ function renderMarkdown(md) {
+-  return marked(md);
++  return marked.parse(md);
+ }
+ 
+ /** Parse command-line arguments (untrusted input). */

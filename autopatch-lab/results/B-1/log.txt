@@ -1,0 +1,6 @@
+minimist@1.2.6: tests pass after bump
+lodash@4.18.0: tests pass after bump
+marked@4.0.10: tests FAIL after bump
+marked: tests pass after claude-sonnet (single headless session) repair
+hidden grader: 9 pass / 0 fail 
+second-agent review: reject ["marked is a major-version jump (2.0.0 to 4.0.10) with a behaviour-changing code edit (marked(md) to marked.parse(md)). The PR does not show that rendered output is unchanged across the 2.x to 4.x range, and the app renders user-supplied markdown, so output differences matter.","The lockfile is exc

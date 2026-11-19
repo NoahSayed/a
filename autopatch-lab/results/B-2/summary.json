@@ -1,0 +1,82 @@
+{
+  "run": "B-2",
+  "arm": "B",
+  "minutes": 0.5,
+  "results": {
+    "minimist": {
+      "outcome": "bumped, tests pass"
+    },
+    "lodash": {
+      "outcome": "bumped, tests pass"
+    },
+    "marked": {
+      "outcome": "bumped + code repaired, tests pass",
+      "repairedBy": "claude-sonnet (single headless session)"
+    }
+  },
+  "gate": {
+    "testsPass": true,
+    "vulnsCleared": true,
+    "onlyAllowedFilesChanged": true,
+    "noDependencySetChange": true,
+    "scriptsUnchanged": true
+  },
+  "gatePass": true,
+  "hidden": {
+    "pass": 9,
+    "fail": 0,
+    "failed": []
+  },
+  "repairs": [
+    {
+      "pkg": "marked",
+      "by": "claude-sonnet (single headless session)",
+      "costUsd": 0.0653272,
+      "turns": 4,
+      "ms": 9189,
+      "isError": false,
+      "note": "The tests pass again: all 3 of 3 under `npm test`.\n\nmarked 4 no longer exports the module itself as a function, so `marked(md)` threw \"marked is not a function\". I changed the call in `src/app.js` to `marked.parse(md)`, which is synchronous and returns an HTML string. The public API of `src/app.js` is unchanged. I didn't touch the tests or `package.json`, and I didn't run `npm install`.\n\nI didn't "
+    }
+  ],
+  "aiCostUsd": 0.0653,
+  "review": {
+    "verdict": "approve",
+    "reasons": [
+      "package.json changes are limited to the three version bumps listed in the PR description; no dependencies were added or removed and no scripts changed.",
+      "The src/app.js change, marked(md) to marked.parse(md), is the call-style change that marked 4.x expects. It is the only code change in the visible diff and matches the PR's description of a repair.",
+      "I could not review the lockfile, so the resolved versions and integrity hashes are unverified. The PR asserts that lodash 4.18.0 exists and fixes the listed advisories. I could not confirm either from the diff.",
+      "I could not see the rest of src/app.js, so the 'not reachable' claims for the lodash advisories (template, toNumber, unset and similar) are unverified from this diff.",
+      "marked 2.0.0 to 4.0.10 is a major-version jump with possible rendering differences. The PR already marks it as not auto-merge eligible and relies on the existing tests, so it should get human review before merge."
+    ],
+    "costUsd": 0.00257256
+  },
+  "policy": [
+    {
+      "pkg": "minimist",
+      "lane": "fast-track",
+      "why": "critical and reachable from app code",
+      "fix": "1.2.6",
+      "major": false,
+      "flags": [],
+      "autoMergeEligible": true
+    },
+    {
+      "pkg": "lodash",
+      "lane": "patch-now",
+      "why": "high and reachable from app code",
+      "fix": "4.18.0",
+      "major": false,
+      "flags": [],
+      "autoMergeEligible": true
+    },
+    {
+      "pkg": "marked",
+      "lane": "patch-now",
+      "why": "high and reachable from app code",
+      "fix": "4.0.10",
+      "major": true,
+      "flags": [],
+      "autoMergeEligible": false
+    }
+  ]
+}

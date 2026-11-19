@@ -1,0 +1,28 @@
+diff --git a/package.json b/package.json
+index dfbfc35..cb5112b 100644
+--- a/package.json
++++ b/package.json
+@@ -8,8 +8,8 @@
+     "test": "node --test"
+   },
+   "dependencies": {
+-    "lodash": "4.17.20",
+-    "marked": "2.0.0",
+-    "minimist": "1.2.5"
++    "lodash": "4.18.0",
++    "marked": "4.0.10",
++    "minimist": "1.2.6"
+   }
+ }
+diff --git a/src/app.js b/src/app.js
+index 5e942a6..ba35748 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -1,6 +1,6 @@
+ 'use strict';
+ // A tiny "notes" CLI: parse args, render markdown notes, paginate the output.
+-const marked = require('marked');
++const { marked } = require('marked');
+ const parseArgs = require('minimist');
+ const _ = require('lodash');
+ 
