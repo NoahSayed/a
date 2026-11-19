@@ -44,6 +44,8 @@ export const PROBES = {
 export async function runChecks(dir, port, { probes = [], ref, known = [] } = {}) {
   const checks = [];
   const add = (name, pass, detail = '') => checks.push({ name, pass: Boolean(pass), detail: String(detail).slice(0, 300) });
+  const logFile = path.join(dir, 'wp-content/debug.log');
+  const logStart = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').length : 0;
   const ids = pageIds(dir, port);
   // 1. pages load without PHP errors
   for (const [label, p] of [['home', '/'], ['contact page', `/?page_id=${ids.Contact}`], ['gallery page', `/?page_id=${ids.Gallery}`], ['newsletter page', `/?page_id=${ids.Newsletter}`], ['login page', '/wp-login.php']]) {
@@ -63,10 +65,10 @@ export async function runChecks(dir, port, { probes = [], ref, known = [] } = {}
   add('flow: newsletter subscribe', sub.text.includes('"success":true'), sub.text);
   const dr = await http(port, '/wp-admin/admin-ajax.php', { form: { action: 'of_save_field', key: 'of_draft_77', value: 'half-filled' } });
   add('flow: form draft autosave', dr.text.includes('"success":true') && option(dir, port, 'of_draft_77') === 'half-filled', dr.text);
-  // 3. PHP error log
-  const log = fs.existsSync(path.join(dir, 'wp-content/debug.log')) ? fs.readFileSync(path.join(dir, 'wp-content/debug.log'), 'utf8') : '';
+  // 3. PHP error log: only what was logged while THIS check run was making requests (old lines don't count)
+  const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').slice(logStart) : '';
   const fatals = log.split('\n').filter((l) => /PHP (Fatal|Parse) error/.test(l));
-  add('no PHP fatal errors in debug.log', fatals.length === 0, fatals.slice(-2).join(' | '));
+  add('no PHP fatal errors during checks', fatals.length === 0, fatals.slice(-2).join(' | '));
   // 4. exploit probes for the vulns being fixed
   for (const slug of probes) {
     if (!PROBES[slug]) continue;
