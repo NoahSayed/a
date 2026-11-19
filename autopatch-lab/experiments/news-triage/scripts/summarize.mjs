@@ -57,7 +57,7 @@ function summarizeModel(model) {
   };
 }
 
-const models = fs.readdirSync(RES).filter((f) => f.endsWith('.json') && f !== 'all.json').map((f) => f.replace('.json', ''));
+const models = fs.readdirSync(RES).filter((f) => f.endsWith('.json') && f !== 'all.json' && f !== 'summary.json').map((f) => f.replace('.json', ''));
 const summary = {};
 for (const m of models) summary[m] = summarizeModel(m);
 fs.writeFileSync(path.join(RES, 'summary.json'), JSON.stringify(summary, null, 2));
