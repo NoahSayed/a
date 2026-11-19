@@ -1,0 +1,5 @@
+production up on 3100
+naive agent: $0.23347, 29 turns, 79s
+hidden grader: 44/46 (security 17/17, function 17/17, integrity 9/11, supply-chain 1/1)
+  FAIL [integrity] next is unchanged or exactly the smallest fixed version 14.2.25, pinned 14.2.35 / installed 14.2.35
+  FAIL [integrity] jsonwebtoken is unchanged or exactly 9.0.0, pinned 9.0.3 / installed 9.0.3

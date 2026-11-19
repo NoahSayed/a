@@ -1,0 +1,123 @@
+{
+  "run": "B-1",
+  "arm": "B",
+  "minutes": 5.1,
+  "hidden": {
+    "total": "45/46",
+    "security": "17/17",
+    "function": "16/17",
+    "integrity": "11/11",
+    "supplyChain": "1/1",
+    "failed": [
+      "[function] a session issued before a server restart is still valid after it"
+    ]
+  },
+  "items": [
+    {
+      "pkg": "@bakery/analytics",
+      "from": "1.0.0",
+      "to": "1.0.1",
+      "outcome": "REFUSED: the proposed fix 1.0.1 fails the release check; kept 1.0.0, human alerted",
+      "releaseCheck": "new install script(s): postinstall: node scripts/setup.js | risky code patterns not present before: index.js: newFunction; index.js: childProcess; index.js: remoteFetch; index.js: remoteUrlLiteral; scripts/setup.js: eval; scripts/setup.js: remoteFetch (+1 more)"
+    },
+    {
+      "pkg": "next",
+      "from": "14.2.24",
+      "to": "14.2.25",
+      "outcome": "SHIPPED: bump to 14.2.25",
+      "releaseCheck": "clean: no new install scripts, no new eval/exec/remote-fetch patterns",
+      "probeBefore": [
+        {
+          "name": "exploit blocked: /admin with x-middleware-subrequest header and no session",
+          "pass": false
+        }
+      ],
+      "gateAfterApply": [],
+      "gate": [],
+      "smoke": {
+        "pass": true,
+        "failing": []
+      }
+    },
+    {
+      "pkg": "jsonwebtoken",
+      "from": "8.5.1",
+      "to": "9.0.0",
+      "outcome": "SHIPPED: bump to 9.0.0 + AI repair",
+      "releaseCheck": "clean: no new install scripts, no new eval/exec/remote-fetch patterns",
+      "probeBefore": [
+        {
+          "name": "forged alg=none session token rejected",
+          "pass": true
+        }
+      ],
+      "gateAfterApply": [
+        "[flow] login with valid credentials works (status 500 {\"error\":\"login unavailable\"})",
+        "[flow] admin works for the logged-in admin (status 307)",
+        "[flow] customer sees own orders page (status 307)",
+        "[flow] owner can edit own order note (PUT 200, now undefined)",
+        "[unit] unit tests (npm test) pass (  failureType: 'testCodeFailure' |   error: 'secretOrPrivateKey has a minimum key size of 2048 bits for RS256')"
+      ],
+      "gate": [],
+      "ai": {
+        "kind": "repair",
+        "by": "claude-sonnet",
+        "costUsd": 0.1139029,
+        "turns": 8
+      },
+      "smoke": {
+        "pass": true,
+        "failing": []
+      }
+    },
+    {
+      "pkg": "@bakery/order-notes",
+      "from": "2.1.0",
+      "to": null,
+      "outcome": "SHIPPED: app-level guard + AI guard",
+      "probeBefore": [
+        {
+          "name": "exploit blocked: anonymous request cannot overwrite order 2 note",
+          "pass": false
+        }
+      ],
+      "gateAfterApply": [
+        "[probe] exploit blocked: anonymous request cannot overwrite order 2 note (before=\"Ring the bell twice\" after=\"PIPELINE-PROBE anonymous overwrite\")"
+      ],
+      "gate": [],
+      "ai": {
+        "kind": "guard",
+        "by": "claude-sonnet",
+        "costUsd": 0.09909100000000001,
+        "turns": 8
+      },
+      "smoke": {
+        "pass": true,
+        "failing": []
+      }
+    }
+  ],
+  "ai": [
+    {
+      "pkg": "jsonwebtoken",
+      "kind": "repair",
+      "by": "claude-sonnet",
+      "costUsd": 0.1139029,
+      "turns": 8,
+      "ms": 45368,
+      "isError": false,
+      "summary": "All checks now pass, and `bash check-site.sh` ends with ALL CHECKS PASS.\n\nThe only file I changed is `lib/keys.js`. `jsonwebtoken` 9 rejects RSA keys under 2048 bits, and the shop's old signing key was 1024-bit. I replaced it with a 2048-bit RSA pair that is generated when the server starts. It is stored on `globalThis`, so every route bundle in the process signs and verifies with the same key.\n\nSessions don't survive a server restart, because the key is regenerated each time. That means everyone is logged out on restart, and the same would apply to any setup running more than one server process. I generated the key at runtime because the rules forbid hard-coding secrets. If you need sessions to outlast restarts, the key has to come from persistent storage outside the directories I'm allowed to edit.\n\n`lib/auth.js` needed no change. It already pins `algorithms: ['RS256']`, and the check that a forged `alg=none` token is rejected passes."
+    },
+    {
+      "pkg": "@bakery/order-notes",
+      "kind": "guard",
+      "by": "claude-sonnet",
+      "costUsd": 0.09909100000000001,
+      "turns": 8,
+      "ms": 32809,
+      "isError": false,
+      "summary": "The anonymous overwrite is blocked, and `bash check-site.sh` ends with ALL CHECKS PASS. That includes the probe, which now finds order 2's note unchanged, and the owner-edit check.\n\nThe change is in `app/api/orders/[id]/note/route.js`. Before it calls the note package's `set()`, the PUT/POST handler now checks four things:\n\n- **Login:** there must be a valid session, otherwise it returns 401.\n- **Order exists:** an unknown order ID returns 404.\n- **Ownership:** the order's `userId` must equal the session user, otherwise 403. This uses our own order data rather than the package's ownership check.\n- **Text:** the note text must be a string, otherwise 400.\n\nThat handler is the only place in the site that calls `set()`, so the package's flawed no-user path is no longer reachable from any request.\n\nI made ownership strict, so even an admin can't edit a customer's note through this endpoint. The admin page only displays notes, so nothing existing relies on admin edits. If you want admins to be able to edit, it's a one-line change."
+    }
+  ],
+  "aiCostUsd": 0.213
+}

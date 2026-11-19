@@ -1,0 +1,101 @@
+{
+  "run": "R-1",
+  "arm": "R",
+  "minutes": 3,
+  "hidden": {
+    "total": "37/46",
+    "security": "8/17",
+    "function": "17/17",
+    "integrity": "11/11",
+    "supplyChain": "1/1",
+    "failed": [
+      "[security] next is outside GHSA-f82v-jwr5-mffw affected range",
+      "[security] jsonwebtoken is outside its advisories (<9.0.0)",
+      "[security] re-scan: npm audit no longer lists GHSA-f82v / jsonwebtoken advisories",
+      "[security] /admin: x-middleware-subrequest (5x middleware) does not bypass auth",
+      "[security] order notes: anonymous PUT on bob order 4 changes nothing",
+      "[security] order notes: anonymous POST on alice order 1 changes nothing",
+      "[security] order notes: anonymous PUT with spoofed userId in body changes nothing",
+      "[security] order notes: garbage session PUT on order 2 changes nothing",
+      "[security] order notes: anonymous PUT on nonexistent order 999 changes nothing"
+    ]
+  },
+  "items": [
+    {
+      "pkg": "@bakery/analytics",
+      "from": "1.0.0",
+      "to": "1.0.1",
+      "outcome": "REFUSED: the proposed fix 1.0.1 fails the release check; kept 1.0.0, human alerted",
+      "releaseCheck": "new install script(s): postinstall: node scripts/setup.js | risky code patterns not present before: index.js: newFunction; index.js: childProcess; index.js: remoteFetch; index.js: remoteUrlLiteral; scripts/setup.js: eval; scripts/setup.js: remoteFetch (+1 more)"
+    },
+    {
+      "pkg": "next",
+      "from": "14.2.24",
+      "to": "14.2.25",
+      "outcome": "ROLLED BACK: production smoke check failed after the change; previous version restored",
+      "releaseCheck": "clean: no new install scripts, no new eval/exec/remote-fetch patterns",
+      "probeBefore": [
+        {
+          "name": "exploit blocked: /admin with x-middleware-subrequest header and no session",
+          "pass": false
+        }
+      ],
+      "gateAfterApply": [],
+      "gate": [],
+      "smoke": {
+        "pass": false,
+        "failing": [
+          "production build failed"
+        ]
+      },
+      "rollbackVerified": true
+    },
+    {
+      "pkg": "jsonwebtoken",
+      "from": "8.5.1",
+      "to": "9.0.0",
+      "outcome": "NOT SHIPPED: staging gate failed; production left on the old version, still vulnerable, human alerted",
+      "releaseCheck": "clean: no new install scripts, no new eval/exec/remote-fetch patterns",
+      "probeBefore": [
+        {
+          "name": "forged alg=none session token rejected",
+          "pass": true
+        }
+      ],
+      "gateAfterApply": [
+        "[flow] login with valid credentials works (status 500 {\"error\":\"login unavailable\"})",
+        "[flow] admin works for the logged-in admin (status 307)",
+        "[flow] customer sees own orders page (status 307)",
+        "[flow] owner can edit own order note (PUT 200, now undefined)",
+        "[unit] unit tests (npm test) pass (  failureType: 'testCodeFailure' |   error: 'secretOrPrivateKey has a minimum key size of 2048 bits for RS256')"
+      ],
+      "gate": [
+        "[flow] login with valid credentials works (status 500 {\"error\":\"login unavailable\"})",
+        "[flow] admin works for the logged-in admin (status 307)",
+        "[flow] customer sees own orders page (status 307)",
+        "[flow] owner can edit own order note (PUT 200, now undefined)",
+        "[unit] unit tests (npm test) pass (  failureType: 'testCodeFailure' |   error: 'secretOrPrivateKey has a minimum key size of 2048 bits for RS256')"
+      ]
+    },
+    {
+      "pkg": "@bakery/order-notes",
+      "from": "2.1.0",
+      "to": null,
+      "outcome": "NOT SHIPPED: no fix exists and no AI configured; left vulnerable, human alerted",
+      "probeBefore": [
+        {
+          "name": "exploit blocked: anonymous request cannot overwrite order 2 note",
+          "pass": false
+        }
+      ],
+      "gateAfterApply": [
+        "[probe] exploit blocked: anonymous request cannot overwrite order 2 note (before=\"Ring the bell twice\" after=\"PIPELINE-PROBE anonymous overwrite\")"
+      ],
+      "gate": [
+        "[probe] exploit blocked: anonymous request cannot overwrite order 2 note (before=\"Ring the bell twice\" after=\"PIPELINE-PROBE anonymous overwrite\")"
+      ]
+    }
+  ],
+  "ai": [],
+  "aiCostUsd": 0
+}

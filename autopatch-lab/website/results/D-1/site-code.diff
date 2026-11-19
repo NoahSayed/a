@@ -1,0 +1,31 @@
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json -x offered-updates a/app/api/orders/[id]/note/route.js b/app/api/orders/[id]/note/route.js
+--- a/app/api/orders/[id]/note/route.js	2026-11-19 18:48:09.386318854 +0000
++++ b/app/api/orders/[id]/note/route.js	2026-11-19 20:00:46.917584490 +0000
+@@ -15,6 +15,10 @@
+ 
+ async function save(request, { params }) {
+   const session = sessionFromRequest(request);
++  if (!session) return NextResponse.json({ error: 'login required' }, { status: 401 });
++  const existing = notes.get(params.id);
++  if (!existing) return NextResponse.json({ error: 'no such order' }, { status: 404 });
++  if (existing.owner !== session.sub && session.role !== 'admin') return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+   const body = await request.json().catch(() => ({}));
+   try {
+     // order-notes enforces ownership for the user we pass in.
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json -x offered-updates a/package.json b/package.json
+--- a/package.json	2026-11-19 18:49:17.481466463 +0000
++++ b/package.json	2026-11-19 20:00:50.025584675 +0000
+@@ -8,10 +8,10 @@
+     "test": "node --test tests/*.test.mjs"
+   },
+   "dependencies": {
+-    "@bakery/analytics": "file:vendor/bakery-analytics-1.0.0.tgz",
++    "@bakery/analytics": "file:vendor/bakery-analytics-1.0.1.tgz",
+     "@bakery/order-notes": "file:vendor/bakery-order-notes-2.1.0.tgz",
+-    "jsonwebtoken": "8.5.1",
+-    "next": "14.2.24",
++    "jsonwebtoken": "9.0.3",
++    "next": "14.2.35",
+     "react": "18.3.1",
+     "react-dom": "18.3.1"
+   }

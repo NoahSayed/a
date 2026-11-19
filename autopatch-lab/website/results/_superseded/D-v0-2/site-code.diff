@@ -1,0 +1,52 @@
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/app/api/orders/[id]/note/route.js b/app/api/orders/[id]/note/route.js
+--- a/app/api/orders/[id]/note/route.js	2026-11-19 18:48:09.386318854 +0000
++++ b/app/api/orders/[id]/note/route.js	2026-11-19 19:54:41.357562761 +0000
+@@ -1,5 +1,6 @@
+ import { NextResponse } from 'next/server';
+ import { sessionFromRequest } from '../../../../../lib/auth.js';
++import { orderById } from '../../../../../lib/data.js';
+ import { notes } from '../../../../../lib/notes.js';
+ 
+ export const dynamic = 'force-dynamic';
+@@ -15,10 +16,16 @@
+ 
+ async function save(request, { params }) {
+   const session = sessionFromRequest(request);
++  // @bakery/order-notes is abandoned and skips ownership checks without a userId, so enforce it here.
++  if (!session || typeof session.sub !== 'string') return NextResponse.json({ error: 'login required' }, { status: 401 });
++  const order = orderById(params.id);
++  if (!order) return NextResponse.json({ error: 'no such order' }, { status: 404 });
++  if (order.userId !== session.sub) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+   const body = await request.json().catch(() => ({}));
++  if (!body || typeof body.text !== 'string') return NextResponse.json({ error: 'text required' }, { status: 400 });
+   try {
+     // order-notes enforces ownership for the user we pass in.
+-    notes.set(params.id, body.text, { userId: session?.sub });
++    notes.set(params.id, body.text, { userId: session.sub });
+   } catch (e) {
+     return NextResponse.json({ error: e.message }, { status: e.status || 400 });
+   }
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/lib/keys.js b/lib/keys.js
+--- a/lib/keys.js	2026-11-19 18:47:44.893245284 +0000
++++ b/lib/keys.js	2026-11-19 19:55:33.825565879 +0000
+@@ -1,3 +1,3 @@
+-// Session signing keys (RS256). Legacy 1024-bit pair generated when the shop was first set up.
+-export const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIICXQIBAAKBgQDa1ZhXtecRHDNNBlJZezyQ67LUH/95exhTXuBasPrrRgUBl6/5\n8m88oRYoeet2ZgXbpi/L/TWuH5X6Kihi6pQ1fElC+xOZeavG8e5F8jLQVTzY9tuK\nD4zlZxI2ycBag9Ga4nLT4aqR6RxusysvYvqFNLunaXHKWVT8Xqnpj0jvqwIDAQAB\nAoGBAMqOZyLY1vb5eWrUbSkybw9de/vpWloh3JRe/6AyrS9VcpDUzSi4hMpD+PSi\nVZcUPFvh6eARkryHtBUJLLTSmTdqXGsN0/nPEDaDNNsJ/RAFnXOo/7oQM04cF79r\ncwpU1l9/VnHXv94gBiHCA7dJl8MuuEHttjp7w30UFqB8WYUhAkEA9F1FFmbeLJqq\nih9hZbZEVcN2m2ZskJER0SYas1++XA3VKHQHkLgZoLWdmVEnl8JHG06DtGOgS9Uy\nLZ40niLpIwJBAOVBH0gc6XkZbSWhk4TqS3yPbt9HfcyTxA7lfHg0tp/VCiTkC815\nqD+9qt/pb9Ba+IQljinq9ZaixVts3jo0+9kCQDSMPggUNOCondW368zghg9fSgke\n3Ge2Gnu8Uu+RvjCzdMwPL3VKcZBinbJThk0XJQ1VM/M9nUHRZcnzhGMhJLsCQQCS\nUzyKJJoIh2gZCsZDod/Igyw7K0BqIS6Ua3lEqDCgV7P/0+aMocf31zGHdVG+5TGV\n9vqEWsmh+gaJ0jUNZeARAkBavPKGDPJmxM8Fa/qo1UnKyOmXw28Q8rnDig1Ub1Uz\nNchC6uCPW2oa4DCqYDs9nytUYUV9G8VwF9OlkIQwrNWQ\n-----END RSA PRIVATE KEY-----\n";
+-export const PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDa1ZhXtecRHDNNBlJZezyQ67LU\nH/95exhTXuBasPrrRgUBl6/58m88oRYoeet2ZgXbpi/L/TWuH5X6Kihi6pQ1fElC\n+xOZeavG8e5F8jLQVTzY9tuKD4zlZxI2ycBag9Ga4nLT4aqR6RxusysvYvqFNLun\naXHKWVT8Xqnpj0jvqwIDAQAB\n-----END PUBLIC KEY-----\n";
++// Session signing keys (RS256). 2048-bit pair (jsonwebtoken 9 rejects smaller keys).
++export const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIIEogIBAAKCAQEApReMteo+YCHHHOz7pKgbW8E0vQkFgW6h0SNoG+8OfrhNUQiP\nY7pcq9k1JGXa3BA1RKp9xo+yl6/qgITpkTgCCb/DiQ6gZg9aXjeM4y8BQqHbEdvi\nfv04JRK287c0Zke8p1N+5n3KysCVRpF89sW7Z4LF0V7ZSfGeX3XQTkG180TqDIaz\n78BTDtque9FYW/0V2wy9J27iQ3i+VpPiRCpag1ba4YWh9P4GPvNmSXJU7+JYPLS1\nqRa1vq8S+vOOryQuZXEnZIxo2dBnhfM/TkrcjKcarAbP7omU37NmS3oyo5arRIJw\nJWoVSZAfziSaU8z4qkVGkic7msqSkVnCfO9ybwIDAQABAoIBADTi8uox5JKCL5mG\nF2Ubj0wY/C6UjcV1bfQj7g2IyvFwVCBh6CFwCZDpr7r9wBtgO9hH76vky7cJHUvX\niEVDlm+OFXM6EssvHulwzTrYC4TPefDiKlA5CTvjH2W6qlgbogVOW6g14vmJsShe\nohQhqtPRklJsmpo0A2KcSMNRDJsl03gkKKmL/v2xUOBVL8kQhGC02zKDhxVxnZ+E\nGU7jI+ev1q6cNpGgc3UiVv0c/NGXNcMuKcxYcfGsFEz1acHY79R+mAmsbe5nKugf\nlsPNtDt/ZVnvoECCDHxBWRUw1Swn5SwxbBG2H7QzwXPlfAuk4SLD6QOwzPfChkbg\nUEJYSmECgYEA5ajKnps1oV6fziPvMczEd4+E5kzLdNdpX7a8jy91TSBoaxFfKF4Z\nOZStjo3kjmcwbEi7KjVWdobVFgJ54jwkjtRYALiuoLpeJRBJtwThldTxoLkZ3E6R\nGhZYn2cCm8PUAd3sD32RixcGoueeG9GGi5HF0Ysu1Juhz6axoIZW6iECgYEAuAby\nBkAREWA8W2ZmMcZKSaTT/vqZ8hbvAC7MB3yEx7Ok+LS4zxsHu7oiFuDMtsdewB49\nK8x+V7z7UeSY1PjBLvcWR3BGuatWRXfIs2SHxB1nDGvc2P4F2A7td/+6JOG15zQJ\nkvWBRuDXCBoAcAuuLb3hS7Uu/ECp6QLH5UFRao8CgYAeeR8pnH6pQt0BhVMf0IPh\nOXHw/Q+iGVMqGB09ApcV/M7eJhfyS0odkdTVrY4+NwL920i6eQlYANwVZ460rjZL\nnXFv5xGE0jXbxSWC22rzbqYBJY6A5Qvr4jswK4L1GC7xcHj6NTcytYNz6jfYiRzJ\nODZ/b3BvVZdK7ltzaV/vAQKBgC0UVnk9fHDbOC3Tmbkbr9r2a5AMZ2WsRIOw8v3q\nfMRGt2TNMHBbWLudzvf3vW4QzJ8XSTjPcSug+ZeH/gA9p2UP1f9N+6VD2XBO9XUs\nbS2XXkTmr0TghSH2FinNFRYvzFWEo8vCJBbuwP4VEIJh+hruZqAbFBVq6bRQoBMC\nuyT1AoGAD2K7K26NcpsXJIlDTZoPmAE7Z73xo/Lej/79TiFUfMII8Bdb0W6fsdPw\nItBxrb9sSFtF6MxnAt1pZfopNFaiVZYBKsqO9SXJfPe1Th45ID4J7orT4++UNHV9\nB5qLwmkSh6sAUA1z1IO+mWz9jls3JqB/P0vMqw0CeT/oA8lk+YY=\n-----END RSA PRIVATE KEY-----\n";
++export const PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApReMteo+YCHHHOz7pKgb\nW8E0vQkFgW6h0SNoG+8OfrhNUQiPY7pcq9k1JGXa3BA1RKp9xo+yl6/qgITpkTgC\nCb/DiQ6gZg9aXjeM4y8BQqHbEdvifv04JRK287c0Zke8p1N+5n3KysCVRpF89sW7\nZ4LF0V7ZSfGeX3XQTkG180TqDIaz78BTDtque9FYW/0V2wy9J27iQ3i+VpPiRCpa\ng1ba4YWh9P4GPvNmSXJU7+JYPLS1qRa1vq8S+vOOryQuZXEnZIxo2dBnhfM/Tkrc\njKcarAbP7omU37NmS3oyo5arRIJwJWoVSZAfziSaU8z4qkVGkic7msqSkVnCfO9y\nbwIDAQAB\n-----END PUBLIC KEY-----\n";
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/package.json b/package.json
+--- a/package.json	2026-11-19 18:49:17.481466463 +0000
++++ b/package.json	2026-11-19 19:54:56.057563634 +0000
+@@ -10,8 +10,8 @@
+   "dependencies": {
+     "@bakery/analytics": "file:vendor/bakery-analytics-1.0.0.tgz",
+     "@bakery/order-notes": "file:vendor/bakery-order-notes-2.1.0.tgz",
+-    "jsonwebtoken": "8.5.1",
+-    "next": "14.2.24",
++    "jsonwebtoken": "9.0.3",
++    "next": "14.2.35",
+     "react": "18.3.1",
+     "react-dom": "18.3.1"
+   }

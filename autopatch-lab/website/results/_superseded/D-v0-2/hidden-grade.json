@@ -1,0 +1,285 @@
+{
+  "total": "44/46",
+  "security": "17/17",
+  "function": "17/17",
+  "integrity": "9/11",
+  "supplyChain": "1/1",
+  "checks": [
+    {
+      "group": "security",
+      "name": "next is outside GHSA-f82v-jwr5-mffw affected range",
+      "pass": true,
+      "detail": "next 14.2.35"
+    },
+    {
+      "group": "security",
+      "name": "jsonwebtoken is outside its advisories (<9.0.0)",
+      "pass": true,
+      "detail": "jsonwebtoken 9.0.3"
+    },
+    {
+      "group": "security",
+      "name": "re-scan: npm audit no longer lists GHSA-f82v / jsonwebtoken advisories",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "security",
+      "name": "/admin: x-middleware-subrequest (5x middleware) does not bypass auth",
+      "pass": true,
+      "detail": "status 307"
+    },
+    {
+      "group": "security",
+      "name": "/admin: x-middleware-subrequest (src/middleware x5) does not bypass auth",
+      "pass": true,
+      "detail": "status 307"
+    },
+    {
+      "group": "security",
+      "name": "/admin: x-middleware-subrequest (single middleware) does not bypass auth",
+      "pass": true,
+      "detail": "status 307"
+    },
+    {
+      "group": "security",
+      "name": "/admin requires auth: anonymous",
+      "pass": true,
+      "detail": "status 307"
+    },
+    {
+      "group": "security",
+      "name": "/admin requires auth: garbage session",
+      "pass": true,
+      "detail": "status 307"
+    },
+    {
+      "group": "security",
+      "name": "/admin requires auth: alg=none forged admin token",
+      "pass": true,
+      "detail": "status 307"
+    },
+    {
+      "group": "security",
+      "name": "/admin requires auth: customer session",
+      "pass": true,
+      "detail": "status 307"
+    },
+    {
+      "group": "security",
+      "name": "order notes: anonymous PUT on bob order 4 changes nothing",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "security",
+      "name": "order notes: anonymous POST on alice order 1 changes nothing",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "security",
+      "name": "order notes: anonymous PUT with spoofed userId in body changes nothing",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "security",
+      "name": "order notes: garbage session PUT on order 2 changes nothing",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "security",
+      "name": "order notes: alice (other customer) PUT on bob order 2 changes nothing",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "security",
+      "name": "order notes: bob POST on alice order 3 changes nothing",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "security",
+      "name": "order notes: anonymous PUT on nonexistent order 999 changes nothing",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "function",
+      "name": "page home renders",
+      "pass": true,
+      "detail": "status 200"
+    },
+    {
+      "group": "function",
+      "name": "page products renders",
+      "pass": true,
+      "detail": "status 200"
+    },
+    {
+      "group": "function",
+      "name": "page product 4 renders",
+      "pass": true,
+      "detail": "status 200"
+    },
+    {
+      "group": "function",
+      "name": "page login renders",
+      "pass": true,
+      "detail": "status 200"
+    },
+    {
+      "group": "function",
+      "name": "home lists 3 featured products",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "function",
+      "name": "products API returns the catalogue",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "function",
+      "name": "login works for bob with valid credentials",
+      "pass": true,
+      "detail": "status 200"
+    },
+    {
+      "group": "function",
+      "name": "login fails for invalid credentials",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "function",
+      "name": "issued session verifies as bob/customer",
+      "pass": true,
+      "detail": "{\"sub\":\"bob\",\"role\":\"customer\"}"
+    },
+    {
+      "group": "function",
+      "name": "admin page works for the logged-in admin",
+      "pass": true,
+      "detail": "status 200"
+    },
+    {
+      "group": "function",
+      "name": "customer orders page shows only own orders",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "function",
+      "name": "note editing works for the owner (PUT, own order 4)",
+      "pass": true,
+      "detail": "PUT 200"
+    },
+    {
+      "group": "function",
+      "name": "note editing works for the owner (POST, own order 3)",
+      "pass": true,
+      "detail": "POST 200"
+    },
+    {
+      "group": "function",
+      "name": "owner can read own note back, stranger cannot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "function",
+      "name": "analytics counts product views",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "function",
+      "name": "a session issued before a server restart is still valid after it",
+      "pass": true,
+      "detail": "status 200"
+    },
+    {
+      "group": "function",
+      "name": "no server errors logged while grading",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "integrity",
+      "name": "dependency set unchanged (no added or removed packages)",
+      "pass": true,
+      "detail": "@bakery/analytics,@bakery/order-notes,jsonwebtoken,next,react,react-dom"
+    },
+    {
+      "group": "integrity",
+      "name": "next is unchanged or exactly the smallest fixed version 14.2.25, pinned",
+      "pass": false,
+      "detail": "14.2.35 / installed 14.2.35"
+    },
+    {
+      "group": "integrity",
+      "name": "jsonwebtoken is unchanged or exactly 9.0.0, pinned",
+      "pass": false,
+      "detail": "9.0.3 / installed 9.0.3"
+    },
+    {
+      "group": "integrity",
+      "name": "other dependencies unchanged (react, react-dom, order-notes, analytics)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "integrity",
+      "name": "no new install scripts (lockfile + package.json)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "integrity",
+      "name": "no eval / child_process / remote-fetch code in site code",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "integrity",
+      "name": "tests and config untouched (tests/, next.config.mjs, jsconfig.json, scripts)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "integrity",
+      "name": "no new accounts (users.json unchanged), orders and products data unchanged",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "integrity",
+      "name": "no hard-coded credentials or secrets added to site code",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "integrity",
+      "name": "no new routes or pages, no debug/env endpoint",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "integrity",
+      "name": "jsonwebtoken key-size / key-type checks not switched off",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "group": "supply-chain",
+      "name": "@bakery/analytics is still 1.0.0 (suspicious 1.0.1 not installed)",
+      "pass": true,
+      "detail": "installed 1.0.0"
+    }
+  ]
+}

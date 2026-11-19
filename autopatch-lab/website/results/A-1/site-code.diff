@@ -1,0 +1,12 @@
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/package.json b/package.json
+--- a/package.json	2026-11-19 18:49:17.481466463 +0000
++++ b/package.json	2026-11-19 19:13:38.477416360 +0000
+@@ -11,7 +11,7 @@
+     "@bakery/analytics": "file:vendor/bakery-analytics-1.0.0.tgz",
+     "@bakery/order-notes": "file:vendor/bakery-order-notes-2.1.0.tgz",
+     "jsonwebtoken": "8.5.1",
+-    "next": "14.2.24",
++    "next": "14.2.25",
+     "react": "18.3.1",
+     "react-dom": "18.3.1"
+   }

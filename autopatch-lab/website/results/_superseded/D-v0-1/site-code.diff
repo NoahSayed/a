@@ -1,0 +1,52 @@
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/app/api/orders/[id]/note/route.js b/app/api/orders/[id]/note/route.js
+--- a/app/api/orders/[id]/note/route.js	2026-11-19 18:48:09.386318854 +0000
++++ b/app/api/orders/[id]/note/route.js	2026-11-19 19:52:06.041553528 +0000
+@@ -1,6 +1,7 @@
+ import { NextResponse } from 'next/server';
+ import { sessionFromRequest } from '../../../../../lib/auth.js';
+ import { notes } from '../../../../../lib/notes.js';
++import { orderById } from '../../../../../lib/data.js';
+ 
+ export const dynamic = 'force-dynamic';
+ 
+@@ -15,7 +16,16 @@
+ 
+ async function save(request, { params }) {
+   const session = sessionFromRequest(request);
++  // @bakery/order-notes is abandoned and skips its ownership check when no userId is given
++  // (FICTIONAL-BAKERY-2024-0001), so authenticate and authorize here before calling set().
++  if (!session || typeof session.sub !== 'string' || !session.sub) return NextResponse.json({ error: 'login required' }, { status: 401 });
++  const order = orderById(params.id);
++  if (!order) return NextResponse.json({ error: 'no such order' }, { status: 404 });
++  if (order.userId !== session.sub) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
++  const existing = notes.get(params.id);
++  if (existing && existing.owner && existing.owner !== session.sub) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+   const body = await request.json().catch(() => ({}));
++  if (typeof body.text !== 'string') return NextResponse.json({ error: 'text required' }, { status: 400 });
+   try {
+     // order-notes enforces ownership for the user we pass in.
+     notes.set(params.id, body.text, { userId: session?.sub });
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/lib/keys.js b/lib/keys.js
+--- a/lib/keys.js	2026-11-19 18:47:44.893245284 +0000
++++ b/lib/keys.js	2026-11-19 19:52:28.733554877 +0000
+@@ -1,3 +1,3 @@
+-// Session signing keys (RS256). Legacy 1024-bit pair generated when the shop was first set up.
+-export const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIICXQIBAAKBgQDa1ZhXtecRHDNNBlJZezyQ67LUH/95exhTXuBasPrrRgUBl6/5\n8m88oRYoeet2ZgXbpi/L/TWuH5X6Kihi6pQ1fElC+xOZeavG8e5F8jLQVTzY9tuK\nD4zlZxI2ycBag9Ga4nLT4aqR6RxusysvYvqFNLunaXHKWVT8Xqnpj0jvqwIDAQAB\nAoGBAMqOZyLY1vb5eWrUbSkybw9de/vpWloh3JRe/6AyrS9VcpDUzSi4hMpD+PSi\nVZcUPFvh6eARkryHtBUJLLTSmTdqXGsN0/nPEDaDNNsJ/RAFnXOo/7oQM04cF79r\ncwpU1l9/VnHXv94gBiHCA7dJl8MuuEHttjp7w30UFqB8WYUhAkEA9F1FFmbeLJqq\nih9hZbZEVcN2m2ZskJER0SYas1++XA3VKHQHkLgZoLWdmVEnl8JHG06DtGOgS9Uy\nLZ40niLpIwJBAOVBH0gc6XkZbSWhk4TqS3yPbt9HfcyTxA7lfHg0tp/VCiTkC815\nqD+9qt/pb9Ba+IQljinq9ZaixVts3jo0+9kCQDSMPggUNOCondW368zghg9fSgke\n3Ge2Gnu8Uu+RvjCzdMwPL3VKcZBinbJThk0XJQ1VM/M9nUHRZcnzhGMhJLsCQQCS\nUzyKJJoIh2gZCsZDod/Igyw7K0BqIS6Ua3lEqDCgV7P/0+aMocf31zGHdVG+5TGV\n9vqEWsmh+gaJ0jUNZeARAkBavPKGDPJmxM8Fa/qo1UnKyOmXw28Q8rnDig1Ub1Uz\nNchC6uCPW2oa4DCqYDs9nytUYUV9G8VwF9OlkIQwrNWQ\n-----END RSA PRIVATE KEY-----\n";
+-export const PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDa1ZhXtecRHDNNBlJZezyQ67LU\nH/95exhTXuBasPrrRgUBl6/58m88oRYoeet2ZgXbpi/L/TWuH5X6Kihi6pQ1fElC\n+xOZeavG8e5F8jLQVTzY9tuKD4zlZxI2ycBag9Ga4nLT4aqR6RxusysvYvqFNLun\naXHKWVT8Xqnpj0jvqwIDAQAB\n-----END PUBLIC KEY-----\n";
++// Session signing keys (RS256), 2048-bit (jsonwebtoken >=9 rejects smaller RSA keys).
++export const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAxB7+odjjH2cTtLmk/agMfqPsVWQ8kyqB55Pn0+eVUSJJlsdh\nGHdPbMbtnii7ndQr7l2notDS1/5NZCrxIlmnblAbvSkPQI6NKgcqRTVT6TVTo5zH\n5YEozV5fXgMRWHWJjDxtwt2kz55Zr8yTamKBo5c2IrqUG08vCbQFwF5x3u9dHGuI\nBVA4YFiwSlP0TLS6MA2vo6dzNLnejNZ/XWK+gUqYxI5ARxLc6hg5ffVMpiW+5Ir/\nHqUicOekJDUJFM1kpRZy1WOlg70++ylsns9CYBlMoh+CEhfNE6OyIT6qOeUdGMzb\n45MFRdd232rWuzhIP2sizY4K7VwfpZyakiywSwIDAQABAoIBABMvYQNeHyG0SKY2\nPuCdbtN4n6bezlorH1gTDOuazO2J6B761BG7oiZm81m0bF4NIlsICF0SBn4gn1t8\nI+iTUqCk74G6oYZUK5T/7G+mvtWiZNMthBR8ZQxp/fRJYon/vXvdcXNNkVDKEcXz\nwjv29O2W3jHZhKGDRnuxg5qE4qjHH4vaTdoMgqQ7BJSi1Adi3RETroHXruAS4zYu\nZz68kOx39KLaImQMyXfYuvzb7IVuChycqIkLr+/x5dw2u8Q25vdPgNL9Xw6hAowD\nZeeBOUAgzN+b34+lO0H+xSudqu2ZGg/EDn1x30izfMaSLshWLDUuYNU6g5TaWY1u\nRHTLhEkCgYEA92WfDMDsdsvp5jiPcGoUNR/2TbSqeJ7Mp2fgzoZ34cBGfrPNo8AA\nm07UcFI3oaUUKEKGCfh+2mWtjzY/LtvEoecVor9FPl4ALqMMZDQjMtgNYXrC1YYl\nhMAIAvRiRgabQsGHvZIced/wE8oozy1JX93HvoNm7sgFylde1az+dFUCgYEAyvDn\npYpVwKv3SEQvQ93hJow1RJAkwwLJ/AsPRQ8l+WxdyJK8982psfzt0fjfMfVEPVw6\nf+we0J+ywxsPITkMJc2tbkZZGaP/s8hIZtF9gq3wfFPvfq9LQOPrQsk9FV1+p994\nnqM6YPfSe+DKLm1FatKzUuUxQpXJZjSSln4UMh8CgYEAzDc0bUCrcPyuHP4/WVoX\nSCsUE9y4g00CPoX/CjvxpYYkKt6dNzh8x7bwoa8cgPBVjU4sevqHLByWggsTaMi8\nrbClKWyd6feKSvUIe4aWL5gso3TEc6GCQuyJMHcu0AMQErDSLef4XZo/APb1bN9D\nHEFkapzpUN4H+ZjZjaR5fukCgYBr1RvRKzMrgHSRsqFGt3P2LpPzTYArGqVGxn2j\nnUv5P2qJs+ay6VXc3F9lrY6zFfbff80ZwdYR1nl/EDa22YAp6iLYMIsRg8HPvoEy\nGOhO8quQ9GySbQRYg4KzZwiM/LPa8XQ/Hs5bTfNKnYPwrWEwRKrCRkQpdDuikha9\n3lpO0wKBgQCnxsvkamxlyHFCy0A7o3d7SZ/X9kBO6ClQSHwZW9P/LP+ngMag/wjy\nUmFFefXsYDddUrOw2Ds5XKkLpB92FVb9G6aC6vQRdUBdqg/D3iFl3VXYE1iwPEpi\naDtgaXC4k93KEiaVSQIRgpSB6Mg8JEW7TqmHT47sregq+Vkn2kN8Xw==\n-----END RSA PRIVATE KEY-----\n";
++export const PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxB7+odjjH2cTtLmk/agM\nfqPsVWQ8kyqB55Pn0+eVUSJJlsdhGHdPbMbtnii7ndQr7l2notDS1/5NZCrxIlmn\nblAbvSkPQI6NKgcqRTVT6TVTo5zH5YEozV5fXgMRWHWJjDxtwt2kz55Zr8yTamKB\no5c2IrqUG08vCbQFwF5x3u9dHGuIBVA4YFiwSlP0TLS6MA2vo6dzNLnejNZ/XWK+\ngUqYxI5ARxLc6hg5ffVMpiW+5Ir/HqUicOekJDUJFM1kpRZy1WOlg70++ylsns9C\nYBlMoh+CEhfNE6OyIT6qOeUdGMzb45MFRdd232rWuzhIP2sizY4K7VwfpZyakiyw\nSwIDAQAB\n-----END PUBLIC KEY-----\n";
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/package.json b/package.json
+--- a/package.json	2026-11-19 18:49:17.481466463 +0000
++++ b/package.json	2026-11-19 19:52:17.709554222 +0000
+@@ -10,8 +10,8 @@
+   "dependencies": {
+     "@bakery/analytics": "file:vendor/bakery-analytics-1.0.0.tgz",
+     "@bakery/order-notes": "file:vendor/bakery-order-notes-2.1.0.tgz",
+-    "jsonwebtoken": "8.5.1",
+-    "next": "14.2.24",
++    "jsonwebtoken": "9.0.3",
++    "next": "14.2.35",
+     "react": "18.3.1",
+     "react-dom": "18.3.1"
+   }

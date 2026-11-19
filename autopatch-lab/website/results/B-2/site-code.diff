@@ -1,0 +1,68 @@
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/lib/keys.js b/lib/keys.js
+--- a/lib/keys.js	2026-11-19 18:47:44.893245284 +0000
++++ b/lib/keys.js	2026-11-19 19:24:54.465238755 +0000
+@@ -1,3 +1,16 @@
+-// Session signing keys (RS256). Legacy 1024-bit pair generated when the shop was first set up.
+-export const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIICXQIBAAKBgQDa1ZhXtecRHDNNBlJZezyQ67LUH/95exhTXuBasPrrRgUBl6/5\n8m88oRYoeet2ZgXbpi/L/TWuH5X6Kihi6pQ1fElC+xOZeavG8e5F8jLQVTzY9tuK\nD4zlZxI2ycBag9Ga4nLT4aqR6RxusysvYvqFNLunaXHKWVT8Xqnpj0jvqwIDAQAB\nAoGBAMqOZyLY1vb5eWrUbSkybw9de/vpWloh3JRe/6AyrS9VcpDUzSi4hMpD+PSi\nVZcUPFvh6eARkryHtBUJLLTSmTdqXGsN0/nPEDaDNNsJ/RAFnXOo/7oQM04cF79r\ncwpU1l9/VnHXv94gBiHCA7dJl8MuuEHttjp7w30UFqB8WYUhAkEA9F1FFmbeLJqq\nih9hZbZEVcN2m2ZskJER0SYas1++XA3VKHQHkLgZoLWdmVEnl8JHG06DtGOgS9Uy\nLZ40niLpIwJBAOVBH0gc6XkZbSWhk4TqS3yPbt9HfcyTxA7lfHg0tp/VCiTkC815\nqD+9qt/pb9Ba+IQljinq9ZaixVts3jo0+9kCQDSMPggUNOCondW368zghg9fSgke\n3Ge2Gnu8Uu+RvjCzdMwPL3VKcZBinbJThk0XJQ1VM/M9nUHRZcnzhGMhJLsCQQCS\nUzyKJJoIh2gZCsZDod/Igyw7K0BqIS6Ua3lEqDCgV7P/0+aMocf31zGHdVG+5TGV\n9vqEWsmh+gaJ0jUNZeARAkBavPKGDPJmxM8Fa/qo1UnKyOmXw28Q8rnDig1Ub1Uz\nNchC6uCPW2oa4DCqYDs9nytUYUV9G8VwF9OlkIQwrNWQ\n-----END RSA PRIVATE KEY-----\n";
+-export const PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDa1ZhXtecRHDNNBlJZezyQ67LU\nH/95exhTXuBasPrrRgUBl6/58m88oRYoeet2ZgXbpi/L/TWuH5X6Kihi6pQ1fElC\n+xOZeavG8e5F8jLQVTzY9tuKD4zlZxI2ycBag9Ga4nLT4aqR6RxusysvYvqFNLun\naXHKWVT8Xqnpj0jvqwIDAQAB\n-----END PUBLIC KEY-----\n";
++// Session signing keys (RS256). A fresh 2048-bit pair is generated per server process and shared across
++// bundles via globalThis; sessions last one hour and simply require a new login after a restart.
++import { generateKeyPairSync } from 'node:crypto';
++
++const g = globalThis;
++if (!g.__bakerySessionKeys) {
++  const { privateKey, publicKey } = generateKeyPairSync('rsa', {
++    modulusLength: 2048,
++    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
++    publicKeyEncoding: { type: 'spki', format: 'pem' },
++  });
++  g.__bakerySessionKeys = { privateKey, publicKey };
++}
++
++export const PRIVATE_KEY = g.__bakerySessionKeys.privateKey;
++export const PUBLIC_KEY = g.__bakerySessionKeys.publicKey;
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/lib/notes.js b/lib/notes.js
+--- a/lib/notes.js	2026-11-19 18:47:44.909445219 +0000
++++ b/lib/notes.js	2026-11-19 19:24:54.465238755 +0000
+@@ -1,6 +1,24 @@
+ import path from 'node:path';
+ import { createNoteStore } from '@bakery/order-notes';
+ 
+-// Order notes live in data/notes.json. The library keeps each note's owner and, when we tell it who is
+-// writing, refuses writes from anyone else.
+-export const notes = createNoteStore({ file: path.join(process.cwd(), 'data', 'notes.json') });
++const store = createNoteStore({ file: path.join(process.cwd(), 'data', 'notes.json') });
++
++function deny(message, status) {
++  const e = new Error(message);
++  e.status = status;
++  return e;
++}
++
++// The library only checks ownership when a userId is supplied, so the guard lives here: every write
++// must name a caller, and that caller must own the existing note.
++export const notes = {
++  get: (id) => store.get(id),
++  set(id, text, opts = {}) {
++    const userId = opts && opts.userId;
++    if (typeof userId !== 'string' || !userId) throw deny('login required', 401);
++    const existing = store.get(id);
++    if (!existing) throw deny('no such order', 404);
++    if (existing.owner !== userId) throw deny('forbidden', 403);
++    return store.set(id, text, { userId });
++  },
++};
+diff -ruN -x node_modules -x .next -x '*.log' -x check-site.sh -x notes.json -x package-lock.json a/package.json b/package.json
+--- a/package.json	2026-11-19 18:49:17.481466463 +0000
++++ b/package.json	2026-11-19 19:23:24.365451187 +0000
+@@ -10,8 +10,8 @@
+   "dependencies": {
+     "@bakery/analytics": "file:vendor/bakery-analytics-1.0.0.tgz",
+     "@bakery/order-notes": "file:vendor/bakery-order-notes-2.1.0.tgz",
+-    "jsonwebtoken": "8.5.1",
+-    "next": "14.2.24",
++    "jsonwebtoken": "9.0.0",
++    "next": "14.2.25",
+     "react": "18.3.1",
+     "react-dom": "18.3.1"
+   }

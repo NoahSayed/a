@@ -1,0 +1,123 @@
+{
+  "run": "E-2",
+  "arm": "E",
+  "minutes": 5.2,
+  "hidden": {
+    "total": "45/46",
+    "security": "17/17",
+    "function": "16/17",
+    "integrity": "11/11",
+    "supplyChain": "1/1",
+    "failed": [
+      "[function] a session issued before a server restart is still valid after it"
+    ]
+  },
+  "items": [
+    {
+      "pkg": "@bakery/analytics",
+      "from": "1.0.0",
+      "to": "1.0.1",
+      "outcome": "REFUSED: the proposed fix 1.0.1 fails the release check; kept 1.0.0, human alerted",
+      "releaseCheck": "new install script(s): postinstall: node scripts/setup.js | risky code patterns not present before: index.js: newFunction; index.js: childProcess; index.js: remoteFetch; index.js: remoteUrlLiteral; scripts/setup.js: eval; scripts/setup.js: remoteFetch (+1 more)"
+    },
+    {
+      "pkg": "next",
+      "from": "14.2.24",
+      "to": "14.2.25",
+      "outcome": "SHIPPED: bump to 14.2.25",
+      "releaseCheck": "clean: no new install scripts, no new eval/exec/remote-fetch patterns",
+      "probeBefore": [
+        {
+          "name": "exploit blocked: /admin with x-middleware-subrequest header and no session",
+          "pass": false
+        }
+      ],
+      "gateAfterApply": [],
+      "gate": [],
+      "smoke": {
+        "pass": true,
+        "failing": []
+      }
+    },
+    {
+      "pkg": "jsonwebtoken",
+      "from": "8.5.1",
+      "to": "9.0.0",
+      "outcome": "SHIPPED: bump to 9.0.0 + AI repair",
+      "releaseCheck": "clean: no new install scripts, no new eval/exec/remote-fetch patterns",
+      "probeBefore": [
+        {
+          "name": "forged alg=none session token rejected",
+          "pass": true
+        }
+      ],
+      "gateAfterApply": [
+        "[flow] login with valid credentials works (status 500 {\"error\":\"login unavailable\"})",
+        "[flow] admin works for the logged-in admin (status 307)",
+        "[flow] customer sees own orders page (status 307)",
+        "[flow] owner can edit own order note (PUT 200, now undefined)",
+        "[unit] unit tests (npm test) pass (  failureType: 'testCodeFailure' |   error: 'secretOrPrivateKey has a minimum key size of 2048 bits for RS256')"
+      ],
+      "gate": [],
+      "ai": {
+        "kind": "repair",
+        "by": "claude-haiku",
+        "costUsd": 0.0105062,
+        "turns": 14
+      },
+      "smoke": {
+        "pass": true,
+        "failing": []
+      }
+    },
+    {
+      "pkg": "@bakery/order-notes",
+      "from": "2.1.0",
+      "to": null,
+      "outcome": "SHIPPED: app-level guard + AI guard",
+      "probeBefore": [
+        {
+          "name": "exploit blocked: anonymous request cannot overwrite order 2 note",
+          "pass": false
+        }
+      ],
+      "gateAfterApply": [
+        "[probe] exploit blocked: anonymous request cannot overwrite order 2 note (before=\"Ring the bell twice\" after=\"PIPELINE-PROBE anonymous overwrite\")"
+      ],
+      "gate": [],
+      "ai": {
+        "kind": "guard",
+        "by": "claude-haiku",
+        "costUsd": 0.01282877,
+        "turns": 13
+      },
+      "smoke": {
+        "pass": true,
+        "failing": []
+      }
+    }
+  ],
+  "ai": [
+    {
+      "pkg": "jsonwebtoken",
+      "kind": "repair",
+      "by": "claude-haiku",
+      "costUsd": 0.0105062,
+      "turns": 14,
+      "ms": 39556,
+      "isError": false,
+      "summary": "All checks now pass: `bash check-site.sh` ends with **ALL CHECKS PASS**.\n\n**Cause:** `lib/keys.js` held a 1024-bit RSA session key. jsonwebtoken 9.0.0 refuses RS256 keys under 2048 bits, so login could not issue a token. The other failures followed from that: no session meant the admin and orders redirects and the note-edit check all failed.\n\n**Fix (only `lib/keys.js` and `lib/auth.js` changed):**\n- `lib/keys.js` no longer contains any key material. It generates a 2048-bit RSA pair with `crypto.generateKeyPairSync` the first time a session is needed, and caches it on `globalThis` so all module instances in the process share it.\n- `lib/auth.js` gets the keys through `getPrivateKey()` / `getPublicKey()` and still signs and verifies with RS256 only. The v9 security fixes are unaffected; a forged `alg=none` token is still rejected in the probe check.\n\n**Trade-offs to know about:**\n- Sessions are now kept in memory. A server restart logs everyone out, and users must sign in again. Sessions also won't carry across multiple server processes or workers.\n- Persisting a key across restarts or running several processes would need a stored secret or a key file. I can't add that under these rul"
+    },
+    {
+      "pkg": "@bakery/order-notes",
+      "kind": "guard",
+      "by": "claude-haiku",
+      "costUsd": 0.01282877,
+      "turns": 13,
+      "ms": 52932,
+      "isError": false,
+      "summary": "The fix is in place and `bash check-site.sh` ends with **ALL CHECKS PASS**, including the exploit probe that was failing.\n\n**The problem:** `app/api/orders/[id]/note/route.js` passed `userId: session?.sub` to the package. For an anonymous request that is `undefined`, and `@bakery/order-notes` only checks ownership when a userId is present, so the write went through.\n\n**The fix:**\n- **`lib/notes.js`**: new `setOrderNote(orderId, text, session)`, which is now the only write path. Before it calls the package, it:\n  - requires a signed-in session (401 otherwise);\n  - requires the text to be a string of at most 500 characters (400 otherwise);\n  - requires the order to exist (404) and to belong to the session's user per `data/orders.json` (403);\n  - requires any existing note to be owned by the session's user (403);\n  - always calls `notes.set` with the verified `userId`.\n- **`app/api/orders/[id]/note/route.js`**: `PUT` and `POST` both go through `setOrderNote`. Anonymous requests get 401 up front. Unexpected errors return a generic 500 instead of the raw message.\n\n**Paths I checked:** `notes.set` is called from nowhere else in the site. `GET` only reads. The order-page UI still reads no"
+    }
+  ],
+  "aiCostUsd": 0.0233
+}
