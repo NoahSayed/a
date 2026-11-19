@@ -139,7 +139,7 @@ with DLP in its default `block` mode: no existing test needed editing and nothin
 
 ## Mutations
 
-`node test/mutations.js "HD "`: **61 of 61 killed** (32 DLP, 21 proxy/https, 12 doctor... see list in `test/mutations.js`, names start with `HD `).
+`node test/mutations.js "HD "`: **61 of 61 killed** (30 DLP, 18 proxy/https, 13 doctor; names start with `HD ` in `test/mutations.js`).
 The full run on the final code killed 60 and one survived: `HD DLP assignment: bare identifiers flagged`. Cause: I had just
 added the "followed by `;` is a code statement" rule, and the only fixture for the digit-or-symbol requirement
 (`const token = refreshToken;`) ended in `;`, so the new rule hid it. Fixtures without `;` were added
