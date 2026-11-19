@@ -1,7 +1,8 @@
 # agent-bridge
 
 A message bridge that lets AI agents working on **different projects** talk to each other, whether they're on
-the same machine, on different machines, or behind a corporate firewall where only Slack is allowed.
+the same machine, on different machines, in a company that only allows Slack, or in a bank that allows nothing
+outside its own network.
 
 Each agent (for example a Claude Code session in `frontend/` and another in `backend/`) runs its own copy of
 this MCP server. They exchange messages through a shared mailbox:
@@ -11,16 +12,22 @@ this MCP server. They exchange messages through a shared mailbox:
   networks.
 - **Slack**: one private Slack channel. Each agent is its own Slack app, and people in the channel can watch and join
   in.
+- **Relay**: a small server you run on your own host (`relay.js`), for on-prem and air-gapped networks. It keeps a
+  hash-chained audit log, has retention and legal hold, an auditor role, mTLS, and server-side DLP.
 
 ```
  Claude Code (frontend)                    Claude Code (backend)
         │ MCP stdio                                │ MCP stdio
  agent-bridge server ──►  mailbox  ◄── agent-bridge server
                      local: ~/.agent-bridge/bridge.db
-                     remote: Supabase (publishable key + per-agent token)
+                     remote: Supabase, a Slack channel, or your own relay
 ```
 
-Requires Node **22.13+**, which ships `node:sqlite`. There are no native builds.
+Requires Node **22.13+**, which ships `node:sqlite` (22.21+ or 24+ for corporate proxies). There are no native builds
+and only two runtime dependencies. Tested in CI on **Linux, macOS and Windows**, on Node 22 and 24.
+
+**In a company, a bank or a fintech?** Read [docs/ENTERPRISE.md](docs/ENTERPRISE.md) (choosing a backend, proxies and TLS
+inspection, DLP, approval, regulations) and [docs/NETWORK-AND-DATA.md](docs/NETWORK-AND-DATA.md) (what goes where).
 
 ## Tools the agents get
 
@@ -147,6 +154,41 @@ request from `human:<your-username>` and can reply to you in a thread.
 - The scopes in the manifest are exactly the calls the code makes. If your workspace restricts any of them, the
   `whoami` tool reports what failed.
 
+## Stage 4: your own relay (on-prem, air-gapped, regulated)
+
+```bash
+# on an internal host
+openssl rand -hex 32 > admin.key && chmod 600 admin.key
+RELAY_ADMIN_KEY_FILE=admin.key RELAY_TLS_CERT=tls.crt RELAY_TLS_KEY=tls.key RELAY_HOST=0.0.0.0 \
+  RELAY_AUDIT_LOG=audit.jsonl npm run relay
+
+# admin: register agents
+RELAY_URL=https://bridge.corp.internal:8787 RELAY_ADMIN_KEY_FILE=admin.key node cli.js add-agent frontend --save
+
+# each agent's machine
+RELAY_URL=https://bridge.corp.internal:8787 node cli.js init ~/code/frontend frontend --relay --hook
+```
+
+The relay speaks the same protocol as the Supabase backend. It adds:
+- mutual TLS (`RELAY_TLS_CA`);
+- a read-only auditor key with `cli.js export`;
+- a hash-chained audit log checked by `cli.js verify-audit`;
+- minimum retention and legal hold;
+- DLP enforced on the server.
+
+There's a non-root Docker image in [`relay/`](relay/). Details: [docs/ENTERPRISE.md](docs/ENTERPRISE.md#2-the-self-hosted-relay).
+
+## Corporate networks, DLP and diagnosis
+
+- **Proxy and TLS inspection:** run `init` in a shell where `HTTPS_PROXY`, `NO_PROXY` and `NODE_EXTRA_CA_CERTS` (or
+  `NODE_USE_SYSTEM_CA=1`) are set. It copies them into the server's settings with `NODE_USE_ENV_PROXY=1`, which Node's
+  `fetch` needs before it will use a proxy. Plain `http://` backends are refused except on localhost.
+- **DLP:** outgoing messages are checked for private keys, cloud and SaaS tokens, JWTs, password assignments, payment
+  card numbers (Luhn plus issuer) and IBANs (mod-97). Set `AGENT_BRIDGE_DLP` to `block` (default), `redact`, `warn` or
+  `off`.
+- **`node cli.js doctor [repo]`:** checks Node, backend, settings, token-file permissions, proxy and CA, DLP, and
+  reachability and auth. Every problem comes with a fix, and secrets are masked.
+
 ## How an agent learns it has mail
 
 An idle Claude Code session doesn't wake up by itself, so pick one or more of these:
@@ -156,7 +198,9 @@ An idle Claude Code session doesn't wake up by itself, so pick one or more of th
    `send_message` and then `wait_for_message`. In the other repo, run
    `/loop 1m check the bridge inbox and answer any requests` so that agent keeps answering.
 3. **Hook** (`init --hook`): on every prompt, the agent is told if unread messages are waiting. If it ever seems
-   silent, run the hook command with `AGENT_BRIDGE_DEBUG=1` to see why.
+   silent, run the hook command with `AGENT_BRIDGE_DEBUG=1` to see why. On Windows, `init` writes an exec-form hook
+   (`--hook-form exec`): no shell, and its settings are kept in your local `.claude/settings.local.json`, never read
+   from the repo. Hooks are optional. Under a managed "managed hooks only" policy, use 1 or 2.
 
 ## Guardrails
 
@@ -184,7 +228,7 @@ AGENT_NAME=human node cli.js send backend "please pause, schema is changing"   #
 |---|---|---|
 | `AGENT_NAME` | (local: required) | This agent's address. With Supabase it must match the token's agent, if set |
 | `AGENT_DESCRIPTION` | none | Shown to other agents in `list_agents` |
-| `AGENT_BRIDGE_BACKEND` | auto | `sqlite`, `supabase` or `slack`; auto picks Supabase if `SUPABASE_URL` is set, else Slack if `SLACK_CHANNEL_ID` is set, else SQLite |
+| `AGENT_BRIDGE_BACKEND` | auto | `sqlite`, `supabase`, `relay` or `slack`; auto picks Supabase if `SUPABASE_URL` is set, else the relay if `RELAY_URL` is set, else Slack if `SLACK_CHANNEL_ID` is set, else SQLite |
 | `AGENT_BRIDGE_DB` | `~/.agent-bridge/bridge.db` | Local mailbox. Must be the **same path** for agents that should talk |
 | `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` | | Supabase project and its publishable (anon) key |
 | `AGENT_BRIDGE_TOKEN` / `AGENT_BRIDGE_TOKEN_FILE` | | This agent's token, or a file holding it (preferred) |
@@ -194,6 +238,12 @@ AGENT_NAME=human node cli.js send backend "please pause, schema is changing"   #
 | `SLACK_CHANNEL_ID` | | The bridge channel (`C0...`) |
 | `SLACK_BOT_TOKEN` / `SLACK_BOT_TOKEN_FILE` | | This agent's bot token, or a file holding it (preferred) |
 | `AGENT_BRIDGE_LOOKBACK_HOURS` | `72` | Slack: how far back agents read the channel |
+| `RELAY_URL` | | Your relay (`https://...`). The agent token works as for Supabase |
+| `RELAY_TLS_CA`, `RELAY_TLS_CLIENT_CERT`, `RELAY_TLS_CLIENT_KEY` | | Client side of the relay's mutual TLS |
+| `RELAY_ADMIN_KEY` / `_FILE`, `RELAY_AUDITOR_KEY` / `_FILE` | | Admin and read-only auditor credentials (admin machine only) |
+| `AGENT_BRIDGE_DLP` | `block` | `block`, `redact`, `warn` or `off` |
+| `HTTPS_PROXY`, `NO_PROXY`, `NODE_USE_ENV_PROXY`, `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA` | | Corporate proxy and CA. `init` copies them for you |
+| `AGENT_BRIDGE_ALLOW_INSECURE_HTTP` | unset | `1` allows plain `http://` backends off localhost (labs only) |
 
 ## Known limits
 
@@ -210,7 +260,7 @@ AGENT_NAME=human node cli.js send backend "please pause, schema is changing"   #
 
 ## Tests
 
-`npm test` runs every suite that needs no API key: end-to-end (on all three backends), security, Slack, concurrency,
-CLI and the adversary-round regressions. It needs a local Postgres for the Supabase stand-in (`TEST_PG_URL`, default
+`npm test` runs every suite that needs no API key: end-to-end (on all four backends), security, Slack, relay,
+concurrency, CLI, DLP, proxy, doctor and the adversary-round regressions. It needs a local Postgres for the Supabase stand-in (`TEST_PG_URL`, default
 `postgresql://postgres@127.0.0.1:54329/postgres`). CI runs the same suites on every push. What each suite proves, the
 mutation results, and how to run the live tests against your own project: [docs/TESTING.md](docs/TESTING.md).

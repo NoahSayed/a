@@ -10,24 +10,29 @@ third-party register, GDPR transfer assessments, PCI scoping). Background and so
 - **The MCP server** (`server.js`). Each agent's Claude Code session starts one as a child process over stdio. It
   listens on no port and accepts no inbound connections. It only connects out to the configured backend.
 - **The CLI** (`cli.js`). Run by a person for setup, admin and watching traffic. Same egress as the server.
-- **No telemetry, no update checks, no other hosts.** The code calls `fetch` in exactly two places: `stores/supabase.js`
-  and `stores/slack.js`, both to the configured URL, with `redirect: "error"` so a response can't send a request (and
-  its credentials) anywhere else.
+- **The relay** (`relay.js`, optional). A server you run on your own host. It listens on one port (HTTPS, optionally
+  mTLS) and makes no outbound connections.
+- **No telemetry, no update checks, no other hosts.** The code makes network calls in exactly three places, all to the
+  configured URL: `stores/supabase.js` and `stores/slack.js` (`fetch`, with `redirect: "error"` so a response can't
+  send a request, and its credentials, anywhere else), and `stores/tls-fetch.js` (`https.request`, only for a relay
+  that requires client certificates). Plain `http://` is refused except on loopback.
 
 ## Per backend
 
-| | Local (SQLite) | Supabase | Slack |
-|---|---|---|---|
-| **Egress** | none | `https://<project-ref>.supabase.co` (443): one host | `https://slack.com/api/*` (443): one host |
-| **Inbound** | none | none | none (no Events API, no webhook URL) |
-| **Calls** | file I/O only | `POST /rest/v1/rpc/bridge_*` (JSON) | `auth.test`, `conversations.members`, `users.info`, `conversations.history`, `chat.postMessage`, `reactions.add`, `reactions.remove` (form-encoded) |
-| **Credentials on the agent's machine** | none (identity is `AGENT_NAME`; trusts the local user) | publishable key (public by design) + per-agent token in a 0600 file | per-agent Slack bot token (`xoxb-`) in a 0600 file |
-| **Admin credential** | none | Supabase secret key: admin's machine only, never given to agents | Slack workspace admin approves each app |
-| **Where messages are stored** | `~/.agent-bridge/bridge.db` (0600, directory 0700) | `public.bridge_messages` in the Supabase project's region | the Slack channel, under the workspace's retention and archiving settings |
-| **Who can read messages** | anyone who can read the file as that OS user | the sending and receiving agent only (enforced in SQL); project admins | every member of the channel (by design: people watch and join in) |
-| **Who decides the sender** | the local `AGENT_NAME` (cooperative) | the database, from the token's hash | Slack, from the posting bot user |
-| **Retention** | until deleted | until `cli.js purge N` / `delete-agent` | the workspace's Slack retention policy (agents read only the last 72 h) |
-| **Third party for DORA / GDPR** | none | Supabase (processor; pick the region) | Slack/Salesforce (processor; Enterprise Grid data residency where needed) |
+| | Local (SQLite) | Relay (self-hosted) | Supabase | Slack |
+|---|---|---|---|---|
+| **Egress from agents** | none | your relay host only (HTTPS, optional mTLS) | `https://<project-ref>.supabase.co` (443): one host | `https://slack.com/api/*` (443): one host |
+| **Inbound** | none | the relay listens on one port; agents need none | none | none (no Events API, no webhook URL) |
+| **Calls** | file I/O only | `POST /rest/v1/rpc/bridge_*` (JSON), same as Supabase | `POST /rest/v1/rpc/bridge_*` (JSON) | `auth.test`, `conversations.members`, `users.info`, `conversations.history`, `chat.postMessage`, `reactions.add`, `reactions.remove` (form-encoded) |
+| **Credentials on the agent's machine** | none (identity is `AGENT_NAME`; trusts the local user) | per-agent token in a 0600 file (+ client cert for mTLS) | publishable key (public by design) + per-agent token in a 0600 file | per-agent Slack bot token (`xoxb-`) in a 0600 file |
+| **Admin credential** | none | relay admin key (relay host and admin only); separate read-only auditor key | Supabase secret key: admin's machine only, never given to agents | Slack workspace admin approves each app |
+| **Where messages are stored** | `~/.agent-bridge/bridge.db` (0600, directory 0700) | the relay's SQLite file on your host (0600) | `public.bridge_messages` in the Supabase project's region | the Slack channel, under the workspace's retention and archiving settings |
+| **Who can read messages** | anyone who can read the file as that OS user | sending and receiving agent only; the auditor key via export; relay host admins | sending and receiving agent only (enforced in SQL); project admins | every member of the channel (by design: people watch and join in) |
+| **Who decides the sender** | the local `AGENT_NAME` (cooperative) | the relay, from the token's hash | the database, from the token's hash | Slack, from the posting bot user |
+| **DLP** | in the client | in the client **and on the server** | in the client | in the client |
+| **Audit trail** | none | hash-chained JSON Lines; `cli.js verify-audit` | Supabase logs | Slack's audit logs and your archiver |
+| **Retention** | until deleted | until `purge` / `delete-agent`, which a minimum retention and a legal hold can block | until `cli.js purge N` / `delete-agent` | the workspace's Slack retention policy (agents read only the last 72 h) |
+| **Third party for DORA / GDPR** | none | none (you run it) | Supabase (processor; pick the region) | Slack/Salesforce (processor; Enterprise Grid data residency where needed) |
 
 ## What a message contains
 
@@ -46,8 +51,8 @@ No file attachments, no images, no repository contents unless an agent pastes th
 
 Node's built-in `fetch` uses `HTTPS_PROXY` / `NO_PROXY` only when the process starts with `NODE_USE_ENV_PROXY=1`
 (Node 22.21+ / 24.5+). A corporate root CA is added with `NODE_EXTRA_CA_CERTS=/path/ca.pem`, or with
-`NODE_USE_SYSTEM_CA=1` (Node 22.19+ / 24.6+) to trust the OS store. These must be in the MCP server's `env` (`init` writes
-them for you once the hardening work lands). **Never set `NODE_TLS_REJECT_UNAUTHORIZED=0`.**
+`NODE_USE_SYSTEM_CA=1` (Node 22.19+ / 24.6+) to trust the OS store. These must be in the MCP server's `env`: `init` copies
+them from your shell and adds `NODE_USE_ENV_PROXY=1`, and `cli.js doctor` checks the result. **Never set `NODE_TLS_REJECT_UNAUTHORIZED=0`.**
 
 ## Allowlist summary for a firewall team
 
@@ -56,3 +61,4 @@ them for you once the hardening work lands). **Never set `NODE_TLS_REJECT_UNAUTH
 | Local | nothing |
 | Supabase | `<project-ref>.supabase.co:443` |
 | Slack | `slack.com:443` |
+| Relay | your relay host and port (internal) |

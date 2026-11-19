@@ -98,12 +98,10 @@ const MUTATIONS = [
   {
     name: "SQLite busy timeout set after WAL switch",
     file: "stores/sqlite.js",
+    // the timeout must be in place before the first statement; without it the WAL switch races
     find: `    this.db = new DatabaseSync(dbPath, { timeout: busyTimeoutMs });
-    this.db.exec(\`PRAGMA busy_timeout = \${Math.max(0, Math.floor(busyTimeoutMs))}\`);
-    this.db.exec("PRAGMA journal_mode = WAL");`,
-    replace: `    this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec(\`PRAGMA busy_timeout = \${Math.max(0, Math.floor(busyTimeoutMs))}\`);`,
+    replace: `    this.db = new DatabaseSync(dbPath);`,
     suite: ["test/concurrency.js", "sqlite"],
   },
   {
@@ -186,7 +184,7 @@ const MUTATIONS = [
   { name: "R1-09 SQLite agent names not validated", file: "stores/sqlite.js",
     find: `      validateAgentName(agentName, "AGENT_NAME"); // R1-09`, replace: ``, suite: R1 },
   { name: "R1-11 client counts UTF-16 units", file: "stores/common.js",
-    find: `  if (charLength(body) > LIMITS.body)`, replace: `  if (body.length > LIMITS.body)`, suite: R1 },
+    find: `  if (charLength(body) > maxBody)`, replace: `  if (body.length > maxBody)`, suite: R1 },
   { name: "R1-12 client follows redirects", file: "stores/supabase.js",
     find: `          redirect: "error",`, replace: ``, suite: R1,
     also: { find: `      if (res.status >= 300 && res.status < 400) {`, replace: `      if (false) {` } },
@@ -440,7 +438,7 @@ const MUTATIONS = [
   { name: "HD proxy init keeps a relative CA path", file: "cli.js",
     find: `px[CA_VAR] = resolve(expandHome(px[CA_VAR]));`, replace: `px[CA_VAR] = px[CA_VAR];`, suite: PX },
   { name: "HD proxy init writes proxy settings for the local backend", file: "cli.js",
-    find: `      if (slack || supabase) {
+    find: `      if (slack || supabase || relay) {
         const px = proxyEnvForConfig`, replace: `      if (true) {
         const px = proxyEnvForConfig`, suite: PX },
   { name: "HD https Supabase accepts plain http", file: "stores/supabase.js",
@@ -489,6 +487,21 @@ const MUTATIONS = [
 ];
 
 // Optional: node test/mutations.js "<part of a name>" ... runs only matching mutations.
+// node test/mutations.js --check only verifies that every mutation still finds its target text
+// (after a merge or refactor a stale target would otherwise "survive" without proving anything).
+if (process.argv.includes("--check")) {
+  let stale = 0;
+  for (const m of MUTATIONS) {
+    const text = readFileSync(ROOT + m.file, "utf8");
+    const missing = [m.find, m.also?.find].filter((f) => f != null && !text.includes(f));
+    if (missing.length) {
+      stale++;
+      console.log(`  STALE ${m.name} (${m.file})`);
+    }
+  }
+  console.log(`${MUTATIONS.length - stale}/${MUTATIONS.length} mutation targets found`);
+  process.exit(stale ? 1 : 0);
+}
 const only = process.argv.slice(2);
 const selected = only.length ? MUTATIONS.filter((m) => only.some((o) => m.name.includes(o))) : MUTATIONS;
 

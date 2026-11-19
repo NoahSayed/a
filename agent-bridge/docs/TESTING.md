@@ -22,13 +22,29 @@ npm run test:live             # your real Supabase project (needs keys, see belo
 
 | Suite | Backends | What it proves |
 |---|---|---|
-| `test/e2e.js` | sqlite, supabase-local, slack-local, supabase-live | Real MCP server processes holding real conversations: each tool, blocking waits (also filtered by thread), peek vs read, bodies with Unicode/quotes/SQL/markdown/CRLF arriving byte for byte, thread privacy, loop cap, every input error reported (not a crash), max-length bodies, restart persistence, two sessions as the same agent never getting the same message, refusal to start with missing config, a bad token, a name/token mismatch or an unreachable URL |
-| `test/security.js` | supabase-local, supabase-live | Raw HTTP with only the publishable key and/or one agent's token: tables unreadable and unwritable, admin functions and internal helpers refused, every function rejecting missing/short/long/wrong tokens, no sender spoofing, no reading/consuming/injecting into others' threads, the hop cap not liftable, oversized input refused by the database itself, token rotation and revocation, name validation, tokens stored only as hashes, no table privileges for `anon` at the SQL level |
+| `test/e2e.js` | sqlite, supabase-local, slack-local, relay-local, supabase-live | Real MCP server processes holding real conversations: each tool, blocking waits (also filtered by thread), peek vs read, bodies with Unicode/quotes/SQL/markdown/CRLF arriving byte for byte, thread privacy, loop cap, every input error reported (not a crash), max-length bodies, restart persistence, two sessions as the same agent never getting the same message, refusal to start with missing config, a bad token, a name/token mismatch or an unreachable URL |
+| `test/security.js` | supabase-local, relay-local, supabase-live | Raw HTTP with only the publishable key and/or one agent's token: tables unreadable and unwritable, admin functions and internal helpers refused, every function rejecting missing/short/long/wrong tokens, no sender spoofing, no reading/consuming/injecting into others' threads, the hop cap not liftable, oversized input refused by the database itself, token rotation and revocation, name validation, tokens stored only as hashes, no table privileges for `anon` at the SQL level |
 | `test/slack.js` | slack-local | The sender is the Slack user who posted (not metadata, not a display name); malformed or out-of-policy metadata ignored; replies past the thread's starting cap or from outsiders dropped by readers; `<!channel>`, mentions and links escaped so a body can't ping anyone; people addressing agents by mention, `@name` or `name:`; agents answering people with a real mention; bots can't pose as people; a person named like an agent stays a person; duplicate bot names trusted by no one; the lookback window; bots outside the channel or with invalid names refused at start; 429s on reads waited out; sends never retried; no redirects; ✅ claims visible and given back on cancel; no forged headers through MCP |
-| `test/concurrency.js` | sqlite, supabase-local, slack-local, supabase-live | Separate OS processes with a start barrier: 12 agents starting at once on a new mailbox, 96 parallel sends in one thread getting unique gap-free hop numbers, 4 readers on one inbox each message delivered exactly once (and the readers really overlapping), a mixed send/read storm |
+| `test/concurrency.js` | sqlite, supabase-local, slack-local, relay-local, supabase-live | Separate OS processes with a start barrier: 12 agents starting at once on a new mailbox, 96 parallel sends in one thread getting unique gap-free hop numbers, 4 readers on one inbox each message delivered exactly once (and the readers really overlapping), a mixed send/read storm |
 | `test/cli.js` | sqlite, supabase-local, slack-local | `init` (merge, idempotent, upgrading a stage-1 hook), the hook run through a real shell, `peek` silent and exit 0 when Supabase is unreachable, admin commands, token files 0600, the token never in the repo, two "machines" talking from generated configs; `slack-manifest` (exactly the scopes the code uses), `save-slack-token`, `init --slack`, two repos talking through the Slack channel with the hook seeing Slack mail |
 | `test/regressions-r1.js` | sqlite, supabase-local, cli | One or more tests per finding of [adversary round 1](adversary/round-01-triage.md). **0/26 on the attacked code, 29/29 now** |
+| `test/relay.js` | relay | Startup refusals (no or weak admin key, mismatched TLS settings), PostgREST-style errors, admin/auditor/agent key separation, the 413 body limit, no stack traces, limits, purge and delete-agent, tokens hashed at rest, 0600 files, restart persistence, the audit log (hashes, never bodies or tokens), `verify-audit` catching edited, deleted and reordered lines, minimum retention, legal hold, auditor export, TLS and mTLS with openssl-made certificates, admin CLI and `init --relay` |
+| `test/dlp.js` | sqlite, supabase-local, slack-local | Each detector, with false-positive fixtures (UUIDs, git SHAs, Slack timestamps, order numbers that fail Luhn, code like `const token = getToken()`); block, redact, warn and off on every backend; the error never echoes the secret; a redaction that would exceed the size limit is refused |
+| `test/proxy.js` | supabase and Slack stand-ins behind a test forward proxy | A real forward proxy (absolute URI and CONNECT) terminating TLS with its own CA, like an inspecting corporate proxy. With `NODE_USE_ENV_PROXY=1` + `NODE_EXTRA_CA_CERTS`, traffic goes through it (the hosts don't resolve directly, so success proves it); `NO_PROXY` bypasses it; without the switch the server says why; `init` copies the settings; https-only URLs (loopback exempt, `localhost.evil.com` refused) |
+| `test/doctor.js` | sqlite, supabase-local, slack-local | Good and broken setups each give the right OK/WARN/FAIL line, a fix and the exit code; secrets masked |
 | `test/mutations.js` | (runs the suites above) | Removes one guard at a time and checks that some suite fails; see [Mutation testing](#mutation-testing) |
+
+## Platforms (CI)
+
+[`.github/workflows/agent-bridge.yml`](../../.github/workflows/agent-bridge.yml) runs on every push:
+- **Linux** × Node 22 and 24, with a Postgres 16 service: every suite.
+- **macOS and Windows** × Node 22 and 24: every suite that needs no Postgres (SQLite, Slack and relay;
+  `AGENT_BRIDGE_TEST_NO_PG=1` skips the Postgres parts of the CLI and regression suites).
+
+Windows taught three things:
+- POSIX file modes don't exist on NTFS, so those checks are skipped there, with the reason printed.
+- Windows won't delete a file that's still open, so tests close their stores before cleanup.
+- Hooks there run without a shell (exec form).
 
 ## Method
 
@@ -46,6 +62,20 @@ Adapted from the dev-workflow rules in the reference repo:
 6. **A commit says what wasn't re-run.** Passing results belong to the commit they ran on.
 
 ## Mutation testing
+
+`node test/mutations.js` makes each change to the real source, runs the named suite, and restores the file.
+`node test/mutations.js "<part of a name>"` runs a subset. "Killed" means a test failed. There are **139 mutations**,
+all killed:
+
+| Group | Count | Where the results are recorded |
+|---|---|---|
+| Core and round 1 (SQL, SQLite, client, server, CLI) | 38 | the table below |
+| Slack (`SL`) | 12 | the table below |
+| Hooks and portability | 4 | [notes/portability.md](notes/portability.md) |
+| Relay (`RL`) | 24 | [notes/relay.md](notes/relay.md) |
+| DLP, proxy, https-only, doctor (`HD`) | 61 | [notes/hardening.md](notes/hardening.md) |
+
+### Core, round 1 and Slack
 
 `node test/mutations.js` makes each change below to the real source, runs the named suite, and restores the file.
 "Killed" means a test failed. Results are for the commit this document ships with.
@@ -124,6 +154,9 @@ For R1-05, R1-13 and "bots can pose as people", two independent guards each prev
 | SQL_ASCII test database counted bytes, not characters | adversary R1-11 | UTF8 test databases |
 | The stand-in split multi-byte characters at request chunk boundaries | the R1-11 test after the database fix | decode the whole body once |
 | The R1-06 quoting fix broke hook de-duplication (hooks stacked up) | the existing CLI suite | de-dup by pattern, quoted or not, plus an upgrade test |
+| A second SQLite startup race: the WAL switch can return BUSY without calling the busy handler | the strengthened startup test (16 processes × 8 rounds): 5/6 runs failed before the fix, 0/25 after | skip if already WAL, otherwise retry with backoff |
+| Three mutations went stale after merges and refactors (their target text no longer existed) | `node test/mutations.js --check`, written for this | retargeted, all killed; `--check` now runs in CI |
+| The Windows hook first read the repo's `.mcp.json`, which a commit could change to redirect the token | review while merging | `peek --set` values live in the local settings file; a test fails on the old version |
 
 ## Live tests against your Supabase project
 

@@ -57,6 +57,8 @@ jobs:
           cache-dependency-path: agent-bridge/package-lock.json
       - run: node --version
       - run: npm ci
+      - name: Every mutation still finds its target (no stale mutations after merges)
+        run: node test/mutations.js --check
       - name: End-to-end (SQLite, Supabase stand-in, Slack stand-in, relay)
         run: node test/e2e.js sqlite supabase-local slack-local relay-local
       - name: Relay (keys, audit chain, retention, TLS/mTLS)
