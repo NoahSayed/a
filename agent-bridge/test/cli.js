@@ -268,7 +268,7 @@ try {
 
   await test("--token-file points at a custom location", async () => {
     const custom = join(tmp, "custom.token");
-    writeFileSync(custom, readFileSync(tokenFile("delta")));
+    writeFileSync(custom, readFileSync(tokenFile("delta")), { mode: 0o600 }); // a token file other users can read is refused (R2-11)
     const r = repo("s-delta");
     const res = await runCli(["init", r, "delta", "--supabase", "--hook", "--token-file", custom], sEnv);
     assert.equal(res.code, 0, res.err);

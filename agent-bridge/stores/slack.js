@@ -6,7 +6,9 @@
 // (event_type "agent_bridge_msg") for agents. A message is claimed by adding a ✅ reaction from
 // the receiving bot; Slack answers "already_reacted" to a second claim, which makes the claim
 // atomic and shows people in the channel what has been picked up. Polling is stateless: every
-// read scans the channel history over a lookback window (default 72 h).
+// read scans the channel history over a lookback window (default 72 h), page by page up to a cap
+// (AGENT_BRIDGE_SLACK_MAX_PAGES, default 500 pages of 200). A scan that is cut short says so
+// (scanWarnings), and readers apply the R1-03 sender limits themselves (rate per minute, unread backlog).
 //
 // Trust model: everyone in the channel can read everything; keep the channel private and invite
 // only the agents' bots and the people who should see the traffic. Hop caps and thread rules are
@@ -28,10 +30,31 @@ const unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&
 const tsToIso = (ts) => new Date(Math.floor(parseFloat(ts) * 1000)).toISOString();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Reader-side limits. Slack has no server to enforce the R1-03 limits, so every reader applies them (R2-07).
+const DEFAULT_MAX_PAGES = 500; // x 200 messages = 100,000 channel messages per scan
+const DEFAULT_RATE_PER_MINUTE = 60;
+const DEFAULT_MAX_UNREAD = 200;
+const HISTORY_PAGE = 200;
+const posInt = (v, dflt) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : dflt);
+const isoOf = (sec) => new Date(Math.floor(sec * 1000)).toISOString();
+const listNames = (names) => {
+  const l = [...names];
+  return l.slice(0, 5).join(", ") + (l.length > 5 ? `, +${l.length - 5} more` : "");
+};
+
 const AUTH_ERRORS = new Set(["invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired"]);
 
 export class SlackStore {
-  constructor({ apiUrl = "https://slack.com/api", token, channel, lookbackHours = 72, fetchImpl = globalThis.fetch }) {
+  constructor({
+    apiUrl = "https://slack.com/api",
+    token,
+    channel,
+    lookbackHours = 72,
+    maxPages,
+    ratePerMinute,
+    maxUnreadPerSender,
+    fetchImpl = globalThis.fetch,
+  }) {
     if (!token) throw new BridgeError("No agent token: set SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_FILE.");
     if (!channel) throw new BridgeError("SLACK_CHANNEL_ID is not set (the bridge channel's ID, like C0123ABCDEF).");
     assertSecureUrl(apiUrl, "SLACK_API_URL");
@@ -39,6 +62,10 @@ export class SlackStore {
     this.token = token;
     this.channel = channel;
     this.lookbackSec = Math.max(1, Number(lookbackHours) || 72) * 3600;
+    this.maxPages = posInt(maxPages, DEFAULT_MAX_PAGES);
+    this.ratePerMinute = posInt(ratePerMinute, DEFAULT_RATE_PER_MINUTE);
+    this.maxUnreadPerSender = posInt(maxUnreadPerSender, DEFAULT_MAX_UNREAD);
+    this.lastScan = null; // what the latest scan() covered and ignored; see scanWarnings()
     this.fetch = fetchImpl;
     this.pollIntervalMs = 3000;
     this.me = null; // { id, name }
@@ -55,7 +82,7 @@ export class SlackStore {
 
   // ------------------------------------------------------------------ Slack Web API
 
-  async api(method, params = {}, { retries = 0 } = {}) {
+  async api(method, params = {}, { retries = 0, maxWaitSec = 10 } = {}) {
     const form = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
       if (v == null) continue;
@@ -85,12 +112,14 @@ export class SlackStore {
         );
       }
       if (res.status === 429 || res.status >= 500) {
-        const wait = Math.min(Number(res.headers.get("retry-after")) || 1, 10) * 1000;
+        const wait = Math.min(Number(res.headers.get("retry-after")) || 1, maxWaitSec) * 1000;
         if (attempt < retries) {
           await sleep(wait);
           continue;
         }
-        throw new NetworkError(res.status === 429 ? `Slack rate limit on ${method}; try again shortly.` : `Slack HTTP ${res.status}`);
+        const err = new NetworkError(res.status === 429 ? `Slack rate limit on ${method}; try again shortly.` : `Slack HTTP ${res.status}`);
+        err.rateLimited = res.status === 429;
+        throw err;
       }
       let data;
       try {
@@ -180,25 +209,89 @@ export class SlackStore {
   async scan() {
     const me = await this.ensureMe();
     const dir = await this.directory();
-    const oldest = (Date.now() / 1000 - this.lookbackSec).toFixed(6);
+    const windowStart = Date.now() / 1000 - this.lookbackSec;
+    const oldest = windowStart.toFixed(6);
     const raw = [];
     let cursor;
-    for (let page = 0; page < 20; page++) {
-      const r = await this.api(
-        "conversations.history",
-        { channel: this.channel, oldest, limit: 200, include_all_metadata: true, cursor },
-        { retries: 2 }
-      );
+    let pages = 0;
+    let cut = null; // why the scan stopped before the start of the window, if it did
+    for (;;) {
+      let r;
+      try {
+        // Pages are fetched newest first. A 429 is waited out (Retry-After, up to 30 s, 4 retries): a long
+        // scan has to ride Slack's rate limit rather than give up halfway.
+        r = await this.api(
+          "conversations.history",
+          { channel: this.channel, oldest, limit: HISTORY_PAGE, include_all_metadata: true, cursor },
+          { retries: 4, maxWaitSec: 30 }
+        );
+      } catch (e) {
+        if (pages > 0 && e.rateLimited) {
+          cut = "Slack kept rate-limiting the scan";
+          break;
+        }
+        throw e;
+      }
+      pages++;
       raw.push(...r.messages);
       cursor = r.response_metadata?.next_cursor;
-      if (!r.has_more || !cursor) break;
+      if (!r.has_more) break;
+      if (!cursor) {
+        cut = "Slack returned no cursor for the next page";
+        break;
+      }
+      if (pages >= this.maxPages) {
+        cut = `the page cap of ${this.maxPages} pages (${this.maxPages * HISTORY_PAGE} messages) was reached`;
+        break;
+      }
     }
     raw.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+    // The oldest moment this scan covers: the window start, or (when it was cut short) the oldest message read.
+    const coveredSince = cut && raw.length ? parseFloat(raw[0].ts) : windowStart;
+    const info = {
+      at: Date.now(),
+      cut,
+      pages,
+      messages: raw.length,
+      coveredSince,
+      outsideCoverage: 0, // replies to me / from me whose thread started before coveredSince
+      rate: new Map(), // sender -> messages ignored beyond the per-minute rate
+      backlog: new Map(), // sender -> messages ignored beyond the unread backlog
+      ambiguous: new Map(), // "human:name" -> messages ignored: several people share the username
+    };
+    this.lastScan = info;
     const out = [];
     const threads = new Map(); // thread id -> { cap, members, lastHop }
+    const sentAt = new Map(); // sender -> timestamps (s) of accepted messages in the last minute
+    const unreadFrom = new Map(); // "from|to" -> accepted messages the recipient hasn't claimed
+    const bump = (map, k) => map.set(k, (map.get(k) || 0) + 1);
     for (const m of raw) {
       const parsed = m.metadata?.event_type === EVENT_TYPE ? this.parseAgentMessage(m, dir) : this.parseHumanMessage(m, dir);
       if (!parsed) continue;
+      if (parsed.ambiguousHuman) {
+        bump(info.ambiguous, `human:${parsed.ambiguousHuman}`);
+        continue;
+      }
+      // Sender limits (R1-03), applied by the reader because Slack has no server: at most N messages a
+      // minute per sender, and at most M unread messages from one sender to one recipient. Messages
+      // beyond a limit are ignored and counted (see scanWarnings); a backlog drains as it is claimed.
+      const tsSec = parseFloat(m.ts);
+      const window = (sentAt.get(parsed.from_agent) || []).filter((t) => tsSec - t < 60);
+      if (window.length >= this.ratePerMinute) {
+        sentAt.set(parsed.from_agent, window);
+        bump(info.rate, parsed.from_agent);
+        continue;
+      }
+      const toBotId = (dir.botsByName.get(parsed.to_agent) || []).length === 1 ? dir.botsByName.get(parsed.to_agent)[0] : null;
+      const pairKey = `${parsed.from_agent}|${parsed.to_agent}`;
+      const claimedByRecipient = !!toBotId && !!(m.reactions || []).find((r) => r.name === CLAIM)?.users?.includes(toBotId);
+      if (toBotId && !claimedByRecipient && (unreadFrom.get(pairKey) || 0) >= this.maxUnreadPerSender) {
+        bump(info.backlog, parsed.from_agent);
+        continue;
+      }
+      window.push(tsSec);
+      sentAt.set(parsed.from_agent, window);
+      if (toBotId && !claimedByRecipient) bump(unreadFrom, pairKey);
       // Nothing in Slack stops a bot posting whatever metadata it likes, so every reader applies the
       // thread rules itself: a reply needs a known thread start, stays between that thread's two
       // participants, and can't go past the cap the thread started with.
@@ -211,7 +304,14 @@ export class SlackStore {
         });
       } else {
         const t = threads.get(parsed.thread_id);
-        if (!t) continue; // start not seen (outside the lookback window, or never existed)
+        if (!t) {
+          // Start not seen: it never existed, or it is older than what this scan covers. The second case
+          // must not make a reply vanish without notice (R2-07), so count it when it concerns this agent.
+          if (parseFloat(parsed.thread_id) < coveredSince && (parsed.from_agent === me.name || parsed.to_agent === me.name)) {
+            info.outsideCoverage++;
+          }
+          continue;
+        }
         if (!t.members.has(parsed.from_agent) || !t.members.has(parsed.to_agent)) continue;
         // Count messages rather than trusting hop numbers: without a lock, two replies sent at
         // the same moment can carry the same hop, and both must still arrive.
@@ -223,6 +323,44 @@ export class SlackStore {
       const claim = (m.reactions || []).find((r) => r.name === CLAIM);
       parsed.read_at = parsed.to_agent === me.name && claim?.users?.includes(me.id) ? "claimed" : null;
       out.push(parsed);
+    }
+    return out;
+  }
+
+  // Human-readable problems with the latest scan(): an incomplete scan (so "no mail" can't be trusted),
+  // replies whose thread start is out of reach, and messages dropped by the reader-side rules.
+  // Callers show these next to their answer; an empty list means the scan was complete and clean.
+  scanWarnings() {
+    const s = this.lastScan;
+    if (!s) return [];
+    const out = [];
+    if (s.cut) {
+      out.push(
+        `The channel scan is INCOMPLETE: ${s.cut}. Only messages since ${isoOf(s.coveredSince)} were read, so older unread ` +
+          `messages may be missing. Raise AGENT_BRIDGE_SLACK_MAX_PAGES (now ${this.maxPages}) or clear out the channel.`
+      );
+    }
+    if (s.outsideCoverage) {
+      out.push(
+        `${s.outsideCoverage} message(s) in threads that started before ${isoOf(s.coveredSince)} were ignored, because the thread's ` +
+          `first message is outside the scanned range. Raise AGENT_BRIDGE_LOOKBACK_HOURS (now ${this.lookbackSec / 3600}) to see them.`
+      );
+    }
+    const counted = (map) => [...map.values()].reduce((a, b) => a + b, 0);
+    if (s.rate.size) {
+      out.push(`Ignored ${counted(s.rate)} message(s) from ${listNames(s.rate.keys())}: more than ${this.ratePerMinute} a minute (AGENT_BRIDGE_RATE_PER_MIN).`);
+    }
+    if (s.backlog.size) {
+      out.push(
+        `Ignored ${counted(s.backlog)} message(s) from ${listNames(s.backlog.keys())}: more than ${this.maxUnreadPerSender} unread ` +
+          `from one sender (AGENT_BRIDGE_MAX_UNREAD). They count again once earlier ones are read.`
+      );
+    }
+    if (s.ambiguous.size) {
+      out.push(
+        `Ignored ${counted(s.ambiguous)} message(s) from ${listNames(s.ambiguous.keys())}: several people in the channel share that ` +
+          `Slack username, so the sender can't be told apart. Ask them to change their username.`
+      );
     }
     return out;
   }
@@ -283,6 +421,9 @@ export class SlackStore {
       }
     }
     if (!to || !rest || !rest.trim()) return null;
+    // Two people can share a Slack username (it is not unique). "human:<name>" would then name either of
+    // them, so such a sender is ambiguous, exactly like duplicate bot names (R2-08): ignore and say so.
+    if ((dir.humansByName.get(u.name) || []).length !== 1) return { ambiguousHuman: u.name };
     return {
       id: m.ts,
       thread_id: m.ts,
@@ -304,7 +445,8 @@ export class SlackStore {
   async whoami() {
     const me = await this.ensureMe();
     const unread = (await this.scan()).filter((x) => x.to_agent === me.name && !x.read_at).length;
-    return { agent: me.name, description: null, project_dir: null, unread };
+    const warnings = this.scanWarnings();
+    return { agent: me.name, description: null, project_dir: null, unread, ...(warnings.length ? { warnings } : {}) };
   }
 
   async listAgents() {

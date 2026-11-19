@@ -20,6 +20,8 @@ import {
   backendFromEnv,
   expandHome,
   readSecret,
+  readSlackToken,
+  readToken,
   resolveDbPath,
 } from "./store.js";
 import { assertSecureUrl } from "./stores/common.js";
@@ -108,7 +110,10 @@ function tokenFromEnv(env, name, shape, shapeHint, label) {
   }
   if (file) {
     const path = expandHome(file);
-    out.push(...checkSecretFile(`${label} token`, path));
+    const checks = checkSecretFile(`${label} token`, path);
+    out.push(...checks);
+    // The server refuses a token file that other users can read (R2-11), so the probe must not use it either.
+    if (!inline && checks.some((c) => c.level === "fail")) return { out, value: null };
     if (!inline) {
       try {
         value = readFileSync(path, "utf8").trim();
@@ -117,10 +122,11 @@ function tokenFromEnv(env, name, shape, shapeHint, label) {
   }
   if (value) {
     if (!shape.test(value)) {
-      out.push(warn(`${label} token format`, `${mask(value)} doesn't look like ${shapeHint}`, `Check that the file holds only the token.`));
-    } else {
-      out.push(ok(`${label} token`, `${mask(value)} (${shapeHint})`));
+      // Neither the server nor this probe sends something that isn't a token to the backend (R2-11).
+      out.push(fail(`${label} token format`, `${mask(value)} doesn't look like ${shapeHint}; it would not be sent anywhere`, `Check that the file holds only the token.`));
+      return { out, value: null };
     }
+    out.push(ok(`${label} token`, `${mask(value)} (${shapeHint})`));
   }
   return { out, value };
 }
@@ -170,7 +176,7 @@ export function explainFailure(e, { what, env, proxy }) {
 async function probeSupabase(env, proxy) {
   const { SupabaseStore } = await import("./stores/supabase.js");
   const out = [];
-  const token = readSecret(env, "AGENT_BRIDGE_TOKEN");
+  const token = readToken(env);
   const store = new SupabaseStore({ url: env.SUPABASE_URL, key: env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY, token });
   try {
     const me = await store.whoami(); // bridge_whoami: proves reachability, the apikey and the token at once
@@ -202,8 +208,13 @@ async function probeSlack(env, proxy) {
   const out = [];
   const store = new SlackStore({
     apiUrl: env.SLACK_API_URL || undefined,
-    token: readSecret(env, "SLACK_BOT_TOKEN"),
+    token: readSlackToken(env),
     channel: env.SLACK_CHANNEL_ID,
+    // the same reading limits the server would use
+    lookbackHours: Number(env.AGENT_BRIDGE_LOOKBACK_HOURS) || undefined,
+    maxPages: Number(env.AGENT_BRIDGE_SLACK_MAX_PAGES) || undefined,
+    ratePerMinute: Number(env.AGENT_BRIDGE_RATE_PER_MIN) || undefined,
+    maxUnreadPerSender: Number(env.AGENT_BRIDGE_MAX_UNREAD) || undefined,
   });
   const explain = (e, title) => {
     if (e instanceof NetworkError) {
@@ -238,6 +249,20 @@ async function probeSlack(env, proxy) {
     if (wanted && wanted !== name) out.push(fail("AGENT_NAME", `AGENT_NAME is "${wanted}" but the bot is "${name}"`, "Remove AGENT_NAME or use that bot's token."));
   } catch (e) {
     out.push(explain(e, "Slack channel"));
+    return out;
+  }
+  // Read the lookback window the way the server does, and say if it can't be read completely (R2-07).
+  try {
+    await store.scan();
+    const s = store.lastScan;
+    const warnings = store.scanWarnings();
+    const since = new Date(Math.floor(s.coveredSince * 1000)).toISOString();
+    if (!warnings.length) out.push(ok("Slack channel scan", `${s.messages} message(s) in ${s.pages} page(s), complete back to ${since}`));
+    for (const w of warnings) {
+      out.push(warn("Slack channel scan", w, "The channel is too busy for the page cap, or senders are flooding it: see AGENT_BRIDGE_SLACK_MAX_PAGES and AGENT_BRIDGE_LOOKBACK_HOURS."));
+    }
+  } catch (e) {
+    out.push(explain(e, "Slack channel scan"));
   }
   return out;
 }
@@ -374,7 +399,7 @@ function checkConfig(env, backend) {
         out.blocked = true;
       }
     }
-    const t = tokenFromEnv(env, "SLACK_BOT_TOKEN", /^xoxb-[A-Za-z0-9-]{10,}$/, "a Slack bot token (xoxb-...)", "Slack");
+    const t = tokenFromEnv(env, "SLACK_BOT_TOKEN", /^xoxb-[A-Za-z0-9-]+$/, "a Slack bot token (xoxb-...)", "Slack");
     out.push(...t.out);
     if (!t.value) out.blocked = true;
   }

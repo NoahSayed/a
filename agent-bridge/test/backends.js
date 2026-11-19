@@ -140,6 +140,7 @@ export async function slackLocalBackend() {
   const { startFakeSlack } = await import("./fake-slack.js");
   const slack = await startFakeSlack();
   const tokens = {};
+  let limitEnv = {}; // the readers apply the sender limits themselves (R2-07)
   const users = {};
   return {
     name: "slack-local",
@@ -161,6 +162,7 @@ export async function slackLocalBackend() {
       SLACK_CHANNEL_ID: slack.channel.id,
       SLACK_BOT_TOKEN: tokens[agent],
       AGENT_NAME: agent,
+      ...limitEnv,
     }),
     addAgent: async (agent) => {
       const u = slack.addUser({ name: agent });
@@ -168,7 +170,14 @@ export async function slackLocalBackend() {
       tokens[agent] = u.token;
     },
     addHuman: (name) => slack.addUser({ name, isBot: false }),
-    setLimits: async () => async () => {}, // Slack has no server-side bridge limits
+    // Same switches as the SQLite backend: Slack readers apply the sender limits themselves (R2-07) and read these.
+    setLimits: async ({ ratePerMinute, maxUnreadPerSender }) => {
+      const before = limitEnv;
+      limitEnv = { ...limitEnv };
+      if (ratePerMinute != null) limitEnv.AGENT_BRIDGE_RATE_PER_MIN = String(ratePerMinute);
+      if (maxUnreadPerSender != null) limitEnv.AGENT_BRIDGE_MAX_UNREAD = String(maxUnreadPerSender);
+      return async () => (limitEnv = before);
+    },
     cleanup: () => slack.close(),
   };
 }

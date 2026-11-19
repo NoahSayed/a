@@ -2,6 +2,7 @@
 // agent-bridge CLI: set up repos, watch traffic, and (Supabase) manage agents.
 // Run with no arguments for help.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +22,9 @@ Watching (local: all traffic; Supabase: traffic of the agent whose token you use
   whoami | agents | log [n] | tail
   send <to> <text...>             send as AGENT_NAME (local, default "human") or as the token's agent
   peek [name] [--set K=V ...]     print an "unread mail" note if any (used by the hook; --set passes
-                                  bridge settings without a shell, for exec-form hooks)
+                                  bridge settings without a shell, for exec-form hooks; proxy and CA
+                                  settings (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, ...) make peek re-run itself once
+                                  so Node starts with them)
 Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
   add-agent <name> ["desc"] [--save]   register an agent, print its token (--save: store it locally)
   rotate-token <name> [--save]         issue a new token (old one stops working)
@@ -65,6 +68,16 @@ const PEEK_ENV_KEYS = new Set([
   "SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY", "SLACK_CHANNEL_ID", "SLACK_BOT_TOKEN_FILE",
   "SLACK_API_URL", "RELAY_URL", "RELAY_TLS_CA", "RELAY_TLS_CLIENT_CERT", "RELAY_TLS_CLIENT_KEY",
 ]);
+
+// Proxy and CA settings an exec-form hook may also pass (R2-12). Node reads these once, at process
+// start (NODE_USE_ENV_PROXY and NODE_EXTRA_CA_CERTS cannot be switched on from inside a running
+// process, and http.setGlobalProxyFromEnv only exists from Node 24.14), so peek re-runs itself once with
+// them in the child's environment. Never NODE_OPTIONS, never the re-exec guard.
+const PEEK_PROCESS_KEYS = new Set([
+  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",
+  "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy",
+]);
+const PEEK_REEXEC_GUARD = "AGENT_BRIDGE_PEEK_REEXEC";
 
 // POSIX single-quoting: nothing inside is expanded by the shell that runs the hook (R1-06).
 const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
@@ -171,14 +184,27 @@ async function main() {
         // .mcp.json could otherwise send this agent's token to another host.
         let env = process.env;
         const sets = argv.flatMap((a, i) => (a === "--set" && i + 1 < argv.length ? [argv[i + 1]] : []));
+        const startup = {}; // proxy / CA settings: only effective if Node starts with them
         if (sets.length) {
           env = { ...process.env };
           for (const kv of sets) {
             const eq = kv.indexOf("=");
             const k = eq > 0 ? kv.slice(0, eq) : "";
-            if (!PEEK_ENV_KEYS.has(k)) throw new Error(`peek --set: ${k || kv} is not a bridge setting`);
+            if (!PEEK_ENV_KEYS.has(k) && !PEEK_PROCESS_KEYS.has(k)) throw new Error(`peek --set: ${k || kv} is not a bridge setting`);
             env[k] = kv.slice(eq + 1);
+            if (PEEK_PROCESS_KEYS.has(k)) startup[k] = env[k];
           }
+        }
+        if (Object.keys(startup).length && process.env[PEEK_REEXEC_GUARD] !== "1") {
+          // Run again, once, with the settings in the child's real environment (R2-12). The guard stops a loop.
+          spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...argv], {
+            env: { ...process.env, ...startup, [PEEK_REEXEC_GUARD]: "1" },
+            stdio: ["ignore", "inherit", "inherit"],
+            timeout: 9000,
+            windowsHide: true,
+          });
+          await flush();
+          process.exit(0);
         }
         const agent = args[0] || env.AGENT_NAME;
         if (backendFromEnv(env) === "sqlite" && !agent) return;
@@ -192,6 +218,8 @@ async function main() {
           const who = summary.map((s) => `${s.n} from ${s.from_agent}`).join(", ");
           console.log(`[agent-bridge] You have unread bridge messages (${who}). Call check_inbox when relevant.`);
         }
+        // Slack: an incomplete scan means "no unread mail" can't be trusted (R2-07).
+        for (const w of store.scanWarnings?.() ?? []) console.log(`[agent-bridge] WARNING: ${w}`);
       } catch (e) {
         // stay silent so a broken bridge never blocks the prompt; AGENT_BRIDGE_DEBUG=1 shows why
         if (process.env.AGENT_BRIDGE_DEBUG) console.error(`agent-bridge peek: ${e.message}`);
@@ -318,7 +346,7 @@ async function main() {
           // No shell at all (Claude Code "exec form": command + args), so it behaves the same under Git Bash,
           // PowerShell and sh. The values travel as arguments in this local settings file (peek --set).
           const sets = Object.entries(env)
-            .filter(([k]) => PEEK_ENV_KEYS.has(k))
+            .filter(([k]) => PEEK_ENV_KEYS.has(k) || PEEK_PROCESS_KEYS.has(k))
             .flatMap(([k, v]) => ["--set", `${k}=${v}`]);
           hook = { type: "command", command: process.execPath, args: [join(HERE, "cli.js"), "peek", name, ...sets], timeout: 10 };
         } else {
@@ -331,9 +359,14 @@ async function main() {
         // Drop any earlier agent-bridge hook for this agent (either form, quoted or not) so re-running init doesn't stack them.
         const ours = new RegExp(`cli\\.js["']?\\s+peek\\s+["']?${name}["']?(\\s|$)`);
         const text = (x) => [x.command, ...(Array.isArray(x.args) ? x.args : [])].map(String).join(" ");
-        settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter(
-          (h) => !(h.hooks || []).some((x) => ours.test(text(x)))
-        );
+        // Only our own entries go: a matcher group can hold other hooks (R2-06), which stay where they are.
+        // A group is dropped only if removing ours leaves it empty.
+        settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.flatMap((h) => {
+          if (!Array.isArray(h?.hooks)) return [h];
+          const kept = h.hooks.filter((x) => !ours.test(text(x)));
+          if (kept.length === h.hooks.length) return [h];
+          return kept.length ? [{ ...h, hooks: kept }] : [];
+        });
         settings.hooks.UserPromptSubmit.push({ hooks: [hook] });
         writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
         console.log(`wrote ${settingsPath}  (unread-mail hook)`);
