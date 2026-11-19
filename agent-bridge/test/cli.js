@@ -1,13 +1,14 @@
 // CLI suite: init (local + Supabase), hook, peek, admin commands, token files.
-//   node test/cli.js            (uses sqlite + supabase-local)
+//   node test/cli.js            (sqlite + supabase-local + slack-local; AGENT_BRIDGE_TEST_NO_PG=1 skips the Postgres part)
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { slackLocalBackend, sqliteBackend, supabaseLocalBackend } from "./backends.js";
-import { runCli, summary, test } from "./harness.js";
+import { NO_PG, slackLocalBackend, sqliteBackend, supabaseLocalBackend } from "./backends.js";
+import { expandHome } from "../store.js";
+import { IS_WIN, baseEnv, rmrf, runCli, skip, summary, test } from "./harness.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -20,31 +21,38 @@ const repo = (name) => {
   return d;
 };
 const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
+const tokenFile = (n) => join(HOME, ".agent-bridge", "tokens", `${n}.token`);
 
 // Launch the MCP server exactly as Claude Code would from a generated .mcp.json.
 async function connectFromMcpJson(repoDir) {
   const cfg = readJson(join(repoDir, ".mcp.json")).mcpServers.bridge;
   const client = new Client({ name: "cli-test", version: "0" });
   await client.connect(
-    new StdioClientTransport({ command: cfg.command, args: cfg.args, env: { PATH: process.env.PATH, HOME, ...cfg.env }, cwd: repoDir })
+    new StdioClientTransport({ command: cfg.command, args: cfg.args, env: { ...baseEnv(HOME), ...cfg.env }, cwd: repoDir })
   );
   const call = async (tool, args = {}) =>
     (await client.callTool({ name: tool, arguments: args })).content.map((c) => c.text).join("\n");
   return { call, close: () => client.close() };
 }
 
-// Runs the hook command from settings.local.json through a real shell, like Claude Code does.
+// Runs the hook from settings.local.json the way Claude Code does: a hook with `args` is spawned
+// directly (exec form, no shell); one without goes through a POSIX shell (`sh -c` / Git Bash).
 // Async on purpose: the fake Supabase server lives in this process and must keep serving.
 async function runHook(repoDir) {
   const s = readJson(join(repoDir, ".claude", "settings.local.json"));
-  const cmd = s.hooks.UserPromptSubmit.at(-1).hooks[0].command;
-  const { stdout, stderr } = await promisify(execFile)("bash", ["-c", cmd], {
-    cwd: repoDir,
-    env: { PATH: process.env.PATH, HOME, AGENT_BRIDGE_DEBUG: "1" },
-  });
+  const hook = s.hooks.UserPromptSubmit.at(-1).hooks[0];
+  const opts = { cwd: repoDir, env: { ...baseEnv(HOME), AGENT_BRIDGE_DEBUG: "1" } };
+  const { stdout, stderr } = Array.isArray(hook.args)
+    ? await promisify(execFile)(hook.command, hook.args, opts)
+    : await promisify(execFile)("bash", ["-c", hook.command], opts);
   if (stderr) console.log(`       hook stderr: ${stderr.trim()}`);
   return stdout;
 }
+
+// POSIX-only assertions (modes, shell-form hooks): skipped, with the reason, where they can't apply.
+const posixTest = (name, fn) => (IS_WIN ? skip(name, "POSIX file modes / POSIX shell form do not exist on Windows") : test(name, fn));
+const assertMode = (p, want) =>
+  IS_WIN ? skip(`mode check of ${p}`, "NTFS has no POSIX permission bits; Windows relies on the user-profile ACL") : assert.equal(statSync(p).mode & 0o777, want, `mode of ${p}`);
 
 try {
   console.log("\n=== cli: local (sqlite) ===");
@@ -118,13 +126,78 @@ try {
     const who = await runCli(["whoami"], { ...localEnv, AGENT_NAME: "beta" });
     assert.equal(JSON.parse(who.out).unread, 1);
   });
+
+  console.log("\n=== cli: portability (no Postgres needed) ===");
+  await test("expandHome: only ~ and ~/x mean the home directory; ~name is a plain relative name", async () => {
+    assert.equal(expandHome("~"), resolve(homedir()));
+    assert.equal(expandHome("~/a/b"), join(homedir(), "a", "b"));
+    assert.equal(expandHome("~foo"), resolve("~foo"));
+    assert.notEqual(expandHome("~foo"), resolve(homedir() + "foo"));
+  });
+
+  await test("--hook-form exec writes command + args with no shell and no env in the settings file", async () => {
+    const r = repo("hook-exec");
+    const res = await runCli(["init", r, "alpha", "--hook", "--hook-form", "exec"], localEnv);
+    assert.equal(res.code, 0, res.err);
+    const hook = readJson(join(r, ".claude", "settings.local.json")).hooks.UserPromptSubmit.at(-1).hooks[0];
+    assert.equal(hook.command, process.execPath);
+    assert.ok(Array.isArray(hook.args));
+    assert.deepEqual(hook.args.slice(1), ["peek", "alpha", "--mcp", join(r, ".mcp.json")]);
+    assert.ok(!JSON.stringify(hook).includes(localEnv.AGENT_BRIDGE_DB), "env values were inlined into the hook");
+    assert.equal((await runHook(r)).trim(), "");
+    await runCli(["send", "alpha", "exec", "form"], { ...localEnv, AGENT_NAME: "human" });
+    assert.match(await runHook(r), /1 from human/, "the exec-form hook did not read the mailbox named in .mcp.json");
+  });
+
+  await test("switching hook form replaces the old hook instead of stacking; bad forms are refused", async () => {
+    const r = repo("hook-switch");
+    for (const form of ["shell", "exec", "shell", "exec"]) {
+      assert.equal((await runCli(["init", r, "alpha", "--hook", "--hook-form", form], localEnv)).code, 0);
+    }
+    assert.equal(readJson(join(r, ".claude", "settings.local.json")).hooks.UserPromptSubmit.length, 1);
+    const bad = await runCli(["init", r, "alpha", "--hook", "--hook-form", "cmd"], localEnv);
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.err, /hook-form/);
+  });
+
+  await test("peek --mcp reads the bridge env from .mcp.json, and stays silent on a broken file", async () => {
+    const r = repo("hook-exec");
+    assert.match((await runCli(["peek", "alpha", "--mcp", join(r, ".mcp.json")], { HOME })).out, /1 from human/);
+    writeFileSync(join(r, "broken.json"), "{not json");
+    const broken = await runCli(["peek", "alpha", "--mcp", join(r, "broken.json")], { HOME });
+    assert.equal(broken.code, 0);
+    assert.equal(broken.out, "");
+  });
+
+  await test("save-token stores a token file (no Postgres involved)", async () => {
+    const tok = "abt_" + "ab".repeat(32);
+    const r = await runCli(["save-token", "portable"], { HOME }, { input: tok + "\r\n" }); // CRLF, as typed on Windows
+    assert.equal(r.code, 0, r.err);
+    assert.equal(readFileSync(tokenFile("portable"), "utf8"), tok + "\n");
+    assertMode(tokenFile("portable"), 0o600);
+  });
+
+  await test("init --supabase points at the token file and keeps the token out of the repo (no Postgres)", async () => {
+    const env = { HOME, SUPABASE_URL: "http://127.0.0.1:1", SUPABASE_PUBLISHABLE_KEY: "x" };
+    const r = repo("s-portable");
+    const res = await runCli(["init", r, "portable", "--supabase", "--hook"], env);
+    assert.equal(res.code, 0, res.err);
+    const tok = readFileSync(tokenFile("portable"), "utf8").trim();
+    for (const f of [".mcp.json", ".claude/settings.local.json"]) {
+      assert.ok(!readFileSync(join(r, f), "utf8").includes(tok), `token leaked into ${f}`);
+    }
+    assert.equal(readJson(join(r, ".mcp.json")).mcpServers.bridge.env.AGENT_BRIDGE_TOKEN_FILE, tokenFile("portable"));
+    assert.equal((await runHook(r)).trim(), "", "an unreachable bridge must not print anything or fail the hook");
+  });
   await lb.cleanup();
 
+  if (NO_PG) {
+    console.log("\n=== cli: supabase section skipped (AGENT_BRIDGE_TEST_NO_PG=1: no Postgres on this runner) ===");
+  } else {
   console.log("\n=== cli: supabase (local stand-in) ===");
   const sb = await supabaseLocalBackend();
   const sEnv = { HOME, SUPABASE_URL: sb.url, SUPABASE_PUBLISHABLE_KEY: sb.publishable };
   const adminEnv = { ...sEnv, SUPABASE_SECRET_KEY: sb.secret };
-  const tokenFile = (n) => join(HOME, ".agent-bridge", "tokens", `${n}.token`);
 
   await test("admin commands need the secret key", async () => {
     const r = await runCli(["add-agent", "gamma"], sEnv);
@@ -136,7 +209,7 @@ try {
     const r = await runCli(["add-agent", "gamma", "API server", "--save"], adminEnv);
     assert.equal(r.code, 0, r.err);
     const st = statSync(tokenFile("gamma"));
-    assert.equal(st.mode & 0o777, 0o600);
+    assertMode(tokenFile("gamma"), 0o600);
     assert.match(readFileSync(tokenFile("gamma"), "utf8"), /^abt_[0-9a-f]{64}\n$/);
   });
 
@@ -238,6 +311,7 @@ try {
   });
 
   await sb.cleanup();
+  }
 
   console.log("\n=== cli: slack (fake Slack API) ===");
   const sl = await slackLocalBackend();
@@ -261,7 +335,7 @@ try {
     for (const a of ["web", "api"]) {
       const r = await runCli(["save-slack-token", a], { HOME }, { input: sl.tokens[a] + "\n" });
       assert.equal(r.code, 0, r.err);
-      assert.equal(statSync(slackTok(a)).mode & 0o777, 0o600);
+      assertMode(slackTok(a), 0o600);
     }
     const bad = await runCli(["save-slack-token", "web2"], { HOME }, { input: "xoxp-user-token-not-a-bot\n" });
     assert.notEqual(bad.code, 0);
@@ -296,7 +370,7 @@ try {
 
   await sl.cleanup();
 } finally {
-  rmSync(tmp, { recursive: true, force: true });
+  rmrf(tmp);
 }
 
 process.exit(summary() ? 1 : 0);

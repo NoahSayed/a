@@ -5,6 +5,10 @@ name: agent-bridge
 # The Supabase stand-in is a real Postgres (below) with Supabase's roles and grants, behind a small
 # PostgREST look-alike (test/fake-postgrest.js); Slack is test/fake-slack.js. Live runs (npm run test:live)
 # need the project's keys and stay manual. Mutation testing (npm run test:mutations) is slow and manual.
+#
+# Matrix: Linux x Node 22/24 runs everything, with a Postgres 16 service container. macOS and Windows x Node 22/24
+# run every suite that needs no Postgres (AGENT_BRIDGE_TEST_NO_PG=1 makes cli/regressions skip their Postgres
+# parts; the supabase-local e2e/concurrency/security runs are simply not requested). See docs/notes/portability.md.
 
 on:
   push:
@@ -17,9 +21,15 @@ on:
       - ".github/workflows/agent-bridge.yml"
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  test-linux:
+    name: ${{ matrix.os }} / node ${{ matrix.node }} (all suites + Postgres)
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: ["22", "24"]
     services:
       postgres:
         image: postgres:16
@@ -42,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: agent-bridge/package-lock.json
       - run: node --version
@@ -58,4 +68,40 @@ jobs:
       - name: CLI (init, hook, admin commands)
         run: node test/cli.js
       - name: Adversary round 1 regressions
+        run: node test/regressions-r1.js
+
+  # macOS and Windows runners have no Postgres service containers, so only the suites that never touch
+  # Postgres run here (SQLite and the Slack stand-in, plus the CLI/regression parts that need no database).
+  test-portable:
+    name: ${{ matrix.os }} / node ${{ matrix.node }} (no Postgres)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        node: ["22", "24"]
+    defaults:
+      run:
+        working-directory: agent-bridge
+    env:
+      AGENT_BRIDGE_TEST_NO_PG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: agent-bridge/package-lock.json
+      - run: node --version
+      - run: npm ci
+      - name: End-to-end (SQLite, Slack stand-in)
+        run: node test/e2e.js sqlite slack-local
+      - name: Slack (identity, hostile channel members, people addressing agents)
+        run: node test/slack.js
+      - name: Concurrency (separate processes)
+        run: node test/concurrency.js sqlite slack-local
+      - name: CLI (init, hook, token files, Slack; Postgres part skipped)
+        run: node test/cli.js
+      - name: Adversary round 1 regressions (SQLite and CLI parts)
         run: node test/regressions-r1.js

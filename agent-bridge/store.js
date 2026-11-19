@@ -15,7 +15,9 @@ import { BridgeError } from "./stores/common.js";
 
 export { BridgeError, NetworkError, MESSAGE_TYPES, LIMITS, AGENT_NAME_RE, isUuid } from "./stores/common.js";
 
-export const expandHome = (p) => resolve(p.startsWith("~") ? homedir() + p.slice(1) : p);
+// "~", "~/x" and (Windows) "~\x" mean the home directory; "~name" is just a relative file name.
+const HOME_PREFIX = process.platform === "win32" ? /^~[\\/]/ : /^~\//;
+export const expandHome = (p) => resolve(p === "~" || HOME_PREFIX.test(p) ? homedir() + p.slice(1) : p);
 
 export function resolveDbPath(p = process.env.AGENT_BRIDGE_DB) {
   return expandHome(p && p.trim() ? p.trim() : "~/.agent-bridge/bridge.db");

@@ -3,14 +3,19 @@
 //   supabase-local real Postgres (TEST_PG_URL) + the migration + fake PostgREST
 //   supabase-live  your real Supabase project (SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY);
 //                  creates agents with a random suffix and deletes them afterwards
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { SupabaseAdmin } from "../stores/supabase.js";
+import { rmrf } from "./harness.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+// CI on macOS/Windows has no Postgres: AGENT_BRIDGE_TEST_NO_PG=1 makes the suites that mix backends run
+// only their Postgres-free parts. Asking for supabase-local by name while it is set is an error, never a skip.
+export const NO_PG = process.env.AGENT_BRIDGE_TEST_NO_PG === "1";
 
 export async function sqliteBackend() {
   const dir = mkdtempSync(join(tmpdir(), "agent-bridge-test-"));
@@ -35,7 +40,7 @@ export async function sqliteBackend() {
       if (maxBytesPerDay != null) limitEnv.AGENT_BRIDGE_MAX_BYTES_PER_DAY = String(maxBytesPerDay);
       return async () => (limitEnv = before);
     },
-    cleanup: async () => rmSync(dir, { recursive: true, force: true }),
+    cleanup: async () => rmrf(dir),
   };
 }
 
@@ -81,6 +86,7 @@ function supabaseCommon({ name, url, publishable, admin, suffix }) {
 }
 
 export async function supabaseLocalBackend() {
+  if (NO_PG) throw new Error("supabase-local needs Postgres but AGENT_BRIDGE_TEST_NO_PG=1 is set");
   const { startFakePostgrest, KEYS } = await import("./fake-postgrest.js");
   const pg = (await import("pg")).default;
   const base = process.env.TEST_PG_URL || "postgresql://postgres@127.0.0.1:54329/postgres";
@@ -166,7 +172,7 @@ export async function slackLocalBackend() {
 }
 
 export async function backendsFromArgs(argv = process.argv.slice(2)) {
-  const wanted = argv.length ? argv : ["sqlite", "supabase-local"];
+  const wanted = argv.length ? argv : NO_PG ? ["sqlite"] : ["sqlite", "supabase-local"];
   const make = {
     sqlite: sqliteBackend,
     "supabase-local": supabaseLocalBackend,

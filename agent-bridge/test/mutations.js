@@ -179,7 +179,7 @@ const MUTATIONS = [
     also: { find: `const madeDir = mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
     if (madeDir) chmodSync(dirname(dbPath), 0o700);`, replace: `mkdirSync(dirname(dbPath), { recursive: true });` } },
   { name: "R1-08 peek uses the long busy timeout", file: "cli.js",
-    find: `await createStore({ agentName: agent, busyTimeoutMs: 1500 });`, replace: `await createStore({ agentName: agent });`, suite: R1 },
+    find: `await createStore({ env, agentName: agent, busyTimeoutMs: 1500 });`, replace: `await createStore({ env, agentName: agent });`, suite: R1 },
   { name: "R1-09 SQLite agent names not validated", file: "stores/sqlite.js",
     find: `      validateAgentName(agentName, "AGENT_NAME"); // R1-09`, replace: ``, suite: R1 },
   { name: "R1-11 client counts UTF-16 units", file: "stores/common.js",
@@ -194,6 +194,10 @@ const MUTATIONS = [
     find: `    if (lstatSync(p).isSymbolicLink()) {`, replace: `    if (false) {`, suite: R1 },
   { name: "R1-06 hook values double-quoted", file: "cli.js",
     find: "const shq = (v) => `'${String(v).replace(/'/g, `'\\\\''`)}'`;", replace: 'const shq = (v) => `"${v}"`;', suite: R1 },
+  { name: "portability: ~name expands to the home directory", file: "store.js",
+    find: "const HOME_PREFIX = process.platform === \"win32\" ? /^~[\\\\/]/ : /^~\\//;", replace: "const HOME_PREFIX = /^~/;", suite: ["test/cli.js"] },
+  { name: "portability: exec-form hook ignores .mcp.json", file: "cli.js",
+    find: "        if (mcpFile) {", replace: "        if (false) {", suite: ["test/cli.js"] },
   { name: "R1-15 sequence privileges kept", file: MIGRATION,
     find: `  execute format('revoke all on sequence %s from public', v_seq);
   if exists (select 1 from pg_roles where rolname = 'anon') then
