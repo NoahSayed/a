@@ -21,7 +21,16 @@ export const baseEnv = (home) => ({
 });
 
 // rmSync that survives Windows still holding a just-closed file (SQLite, a killed child) for a moment.
-export const rmrf = (p) => rmSync(p, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+// If a file is still busy after the retries, leave the temp directory behind and say so: a cleanup
+// problem must not turn a passing suite into a failing one (the tests themselves already ran).
+export const rmrf = (p) => {
+  try {
+    rmSync(p, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (e) {
+    if (e.code !== "EBUSY" && e.code !== "EPERM") throw e;
+    console.log(`  note: left ${p} behind (${e.code}: a file is still open)`);
+  }
+};
 
 const results = [];
 export function skip(name, reason) {

@@ -57,14 +57,16 @@ jobs:
           cache-dependency-path: agent-bridge/package-lock.json
       - run: node --version
       - run: npm ci
-      - name: End-to-end (SQLite, Supabase stand-in, Slack stand-in)
-        run: node test/e2e.js sqlite supabase-local slack-local
+      - name: End-to-end (SQLite, Supabase stand-in, Slack stand-in, relay)
+        run: node test/e2e.js sqlite supabase-local slack-local relay-local
+      - name: Relay (keys, audit chain, retention, TLS/mTLS)
+        run: node test/relay.js
       - name: Security (raw HTTP attacks with the publishable key)
-        run: node test/security.js supabase-local
+        run: node test/security.js supabase-local relay-local
       - name: Slack (identity, hostile channel members, people addressing agents)
         run: node test/slack.js
       - name: Concurrency (separate processes)
-        run: node test/concurrency.js sqlite supabase-local slack-local
+        run: node test/concurrency.js sqlite supabase-local slack-local relay-local
       - name: CLI (init, hook, admin commands)
         run: node test/cli.js
       - name: Adversary round 1 regressions
@@ -95,12 +97,16 @@ jobs:
           cache-dependency-path: agent-bridge/package-lock.json
       - run: node --version
       - run: npm ci
-      - name: End-to-end (SQLite, Slack stand-in)
-        run: node test/e2e.js sqlite slack-local
+      - name: End-to-end (SQLite, Slack stand-in, relay)
+        run: node test/e2e.js sqlite slack-local relay-local
+      - name: Relay (keys, audit chain, retention, TLS/mTLS where openssl exists)
+        run: node test/relay.js
+      - name: Security (relay)
+        run: node test/security.js relay-local
       - name: Slack (identity, hostile channel members, people addressing agents)
         run: node test/slack.js
       - name: Concurrency (separate processes)
-        run: node test/concurrency.js sqlite slack-local
+        run: node test/concurrency.js sqlite slack-local relay-local
       - name: CLI (init, hook, token files, Slack; Postgres part skipped)
         run: node test/cli.js
       - name: Adversary round 1 regressions (SQLite and CLI parts)

@@ -14,7 +14,17 @@ import { createStore } from "../store.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "agent-bridge-r1-"));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const storeFor = (b, agent, extra = {}) => createStore({ env: { ...b.envFor(agent), ...extra } });
+// Every store opened here is closed before the backend is cleaned up: Windows won't delete a
+// SQLite file that this process still holds open.
+const openStores = [];
+const storeFor = async (b, agent, extra = {}) => {
+  const s = await createStore({ env: { ...b.envFor(agent), ...extra } });
+  openStores.push(s);
+  return s;
+};
+const closeStores = async () => {
+  while (openStores.length) await openStores.pop().close().catch(() => {});
+};
 
 function rawRpc(b) {
   return async (fn, body, key = b.publishable) => {
@@ -338,6 +348,7 @@ for (const make of NO_PG ? [sqliteBackend] : [sqliteBackend, supabaseLocalBacken
       });
     }
   } finally {
+    await closeStores();
     await b.cleanup();
   }
 }
