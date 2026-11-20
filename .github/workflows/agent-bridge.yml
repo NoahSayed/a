@@ -81,6 +81,8 @@ jobs:
         run: node test/proxy.js
       - name: doctor
         run: node test/doctor.js
+      - name: Managed installs (managed-mcp.json, agent name from the project folder)
+        run: node test/managed.js
 
   # macOS and Windows runners have no Postgres service containers, so only the suites that never touch
   # Postgres run here (SQLite and the Slack stand-in, plus the CLI/regression parts that need no database).
@@ -123,3 +125,5 @@ jobs:
         run: node test/regressions-r1.js
       - name: Adversary round 2 regressions (Slack, hooks, tokens, exec-form proxy/CA)
         run: node test/regressions-r2-client.js
+      - name: Managed installs (Postgres part skipped)
+        run: node test/managed.js

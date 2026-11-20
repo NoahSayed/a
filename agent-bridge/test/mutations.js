@@ -435,7 +435,8 @@ const MUTATIONS = [
   { name: "HD proxy hook command lacks the proxy environment", file: "cli.js",
     find: `.filter(([k]) => k !== "AGENT_DESCRIPTION")`, replace: `.filter(([k]) => k !== "AGENT_DESCRIPTION" && !/proxy|CA_|SYSTEM/i.test(k))`, suite: PX },
   { name: "HD proxy init keeps a relative CA path", file: "cli.js",
-    find: `px[CA_VAR] = resolve(expandHome(px[CA_VAR]));`, replace: `px[CA_VAR] = px[CA_VAR];`, suite: PX },
+    find: `make the CA path absolute.\n        if (px[CA_VAR]) px[CA_VAR] = resolve(expandHome(px[CA_VAR]));`,
+    replace: `make the CA path absolute.\n        if (px[CA_VAR]) px[CA_VAR] = px[CA_VAR];`, suite: PX },
   { name: "HD proxy init writes proxy settings for the local backend", file: "cli.js",
     find: `      if (slack || supabase || relay) {
         const px = proxyEnvForConfig`, replace: `      if (true) {
@@ -547,6 +548,29 @@ const MUTATIONS = [
     find: `  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, replace: `  "AGENT_BRIDGE_PEEK_REEXEC", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, suite: R2C },
   { name: "R2-12 peek --set passes AGENT_BRIDGE_TOKEN", file: "cli.js",
     find: `  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, replace: `  "AGENT_BRIDGE_TOKEN", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, suite: R2C },
+
+  // ---- managed installs (test/managed.js)
+  { name: "MG launch command carries a per-agent argument", file: "cli.js",
+    find: "      console.log(JSON.stringify({ mcpServers: { \"agent-bridge\": { command, args: [server], env } } }, null, 2));",
+    replace: "      console.log(JSON.stringify({ mcpServers: { \"agent-bridge\": { command, args: [server, \"--agent\", \"x\"], env } } }, null, 2));",
+    suite: ["test/managed.js"] },
+  { name: "MG proxy credentials written into the managed file", file: "cli.js",
+    find: "        if (Object.entries(px).some(([k, v]) => /^(https?)_proxy$/i.test(k) && proxyUrlHasCredentials(v))) {\n          throw new Error(",
+    replace: "        if (false) {\n          throw new Error(", suite: ["test/managed.js"] },
+  { name: "MG project folder name not used", file: "store.js",
+    find: "    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);",
+    replace: "", suite: ["test/managed.js"] },
+  { name: "MG CLAUDE_PROJECT_DIR ignored", file: "store.js",
+    find: "agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd)",
+    replace: "agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || cwd)", suite: ["test/managed.js"] },
+  { name: "MG {agent} placeholder not resolved", file: "store.js",
+    find: "    out[k] = out[k].replaceAll(\"{agent}\", name);", replace: "", suite: ["test/managed.js"] },
+  { name: "MG CA path left relative in the managed file", file: "cli.js",
+    find: "        Object.assign(env, px);\n      }\n      const command = flagValue(\"--node\")",
+    replace: "        Object.assign(env, { ...px, ...(process.env.NODE_EXTRA_CA_CERTS ? { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS } : {}) });\n      }\n      const command = flagValue(\"--node\")",
+    suite: ["test/managed.js"] },
+  { name: "MG folder names not sanitised", file: "store.js",
+    find: "    .replace(/[^a-z0-9_-]+/g, \"-\")", replace: "", suite: ["test/managed.js"] },
 ];
 
 // Optional: node test/mutations.js "<part of a name>" ... runs only matching mutations.
@@ -557,12 +581,17 @@ if (process.argv.includes("--check")) {
   for (const m of MUTATIONS) {
     const text = readFileSync(ROOT + m.file, "utf8");
     const missing = [m.find, m.also?.find].filter((f) => f != null && !text.includes(f));
+    // A target that occurs more than once may mutate the wrong place (the first match is replaced).
+    const ambiguous = [m.find, m.also?.find].filter((f) => f != null && text.split(f).length > 2);
     if (missing.length) {
       stale++;
       console.log(`  STALE ${m.name} (${m.file})`);
+    } else if (ambiguous.length) {
+      stale++;
+      console.log(`  AMBIGUOUS ${m.name} (${m.file}): the target text occurs more than once`);
     }
   }
-  console.log(`${MUTATIONS.length - stale}/${MUTATIONS.length} mutation targets found`);
+  console.log(`${MUTATIONS.length - stale}/${MUTATIONS.length} mutation targets found exactly once`);
   process.exit(stale ? 1 : 0);
 }
 const only = process.argv.slice(2);

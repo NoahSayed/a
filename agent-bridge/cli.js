@@ -18,6 +18,9 @@ Setup
                                   wire a repo's .mcp.json to the bridge (and optional hook)
        --hook-form shell|exec     "shell": one POSIX shell command (default on macOS/Linux);
                                   "exec": command + args, no shell (default on Windows)
+  managed-config [--node P] [--server P]
+                                  print a managed-mcp.json entry for admins: one fixed launch command,
+                                  settings in env, each project's agent named after its folder
 Watching (local: all traffic; Supabase: traffic of the agent whose token you use)
   whoami | agents | log [n] | tail
   send <to> <text...>             send as AGENT_NAME (local, default "human") or as the token's agent
@@ -55,7 +58,7 @@ const flagValue = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form", "--from", "--to"]);
+const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form", "--from", "--to", "--node", "--server"]);
 const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 const [cmd, ...args] = positional;
 
@@ -507,6 +510,65 @@ async function main() {
         settings: { org_deploy_enabled: false, socket_mode_enabled: false, token_rotation_enabled: false },
       };
       console.log(JSON.stringify(manifest, null, 2));
+      break;
+    }
+
+    case "managed-config": {
+      // A machine-wide Claude Code managed-mcp.json entry. The launch command is fixed (that is what the
+      // allowlist compares); every setting is in env; each project gets its own agent name from its folder
+      // (AGENT_BRIDGE_NAME_FROM=project) and its own token file through "{agent}". The managed file is
+      // readable by every user on the machine, so no secret may ever be written into it.
+      const backend = backendFromEnv(process.env);
+      const env = { AGENT_BRIDGE_NAME_FROM: "project" };
+      if (backend === "sqlite") {
+        env.AGENT_BRIDGE_DB = process.env.AGENT_BRIDGE_DB || "~/.agent-bridge/bridge.db";
+      } else if (backend === "supabase") {
+        const key = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
+        if (!process.env.SUPABASE_URL || !key) throw new Error("managed-config for Supabase needs SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.");
+        if (/^sb_secret_/.test(key)) throw new Error("SUPABASE_PUBLISHABLE_KEY holds a secret key; use the publishable key.");
+        Object.assign(env, { AGENT_BRIDGE_BACKEND: "supabase", SUPABASE_URL: process.env.SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY: key });
+        env.AGENT_BRIDGE_TOKEN_FILE = "~/.agent-bridge/tokens/{agent}.token";
+      } else if (backend === "relay") {
+        if (!process.env.RELAY_URL) throw new Error("managed-config for the relay needs RELAY_URL.");
+        Object.assign(env, { AGENT_BRIDGE_BACKEND: "relay", RELAY_URL: process.env.RELAY_URL });
+        env.AGENT_BRIDGE_TOKEN_FILE = "~/.agent-bridge/tokens/{agent}.token";
+        for (const k of ["RELAY_TLS_CA", "RELAY_TLS_CLIENT_CERT", "RELAY_TLS_CLIENT_KEY"]) {
+          if (process.env[k]) env[k] = process.env[k].startsWith("~") ? process.env[k] : resolve(process.env[k]);
+        }
+      } else if (backend === "slack") {
+        if (!process.env.SLACK_CHANNEL_ID) throw new Error("managed-config for Slack needs SLACK_CHANNEL_ID.");
+        Object.assign(env, { AGENT_BRIDGE_BACKEND: "slack", SLACK_CHANNEL_ID: process.env.SLACK_CHANNEL_ID });
+        env.SLACK_BOT_TOKEN_FILE = "~/.agent-bridge/tokens/{agent}.slack-token";
+      }
+      if (process.env.AGENT_BRIDGE_DLP) env.AGENT_BRIDGE_DLP = process.env.AGENT_BRIDGE_DLP;
+      if (backend !== "sqlite") {
+        const px = proxyEnvForConfig(process.env);
+        if (Object.entries(px).some(([k, v]) => /^(https?)_proxy$/i.test(k) && proxyUrlHasCredentials(v))) {
+          throw new Error(
+            "a proxy URL contains credentials; the managed file is readable by every user, so they can't go in it. " +
+              "Use a proxy that authenticates the machine, or set the proxy per user."
+          );
+        }
+        if (px[CA_VAR]) px[CA_VAR] = resolve(expandHome(px[CA_VAR]));
+        Object.assign(env, px);
+      }
+      const command = flagValue("--node") || process.execPath;
+      const server = flagValue("--server") || join(HERE, "server.js");
+      console.log(JSON.stringify({ mcpServers: { "agent-bridge": { command, args: [server], env } } }, null, 2));
+      console.error(
+        [
+          "Save the JSON above as Claude Code's managed-mcp.json:",
+          "  Linux:   /etc/claude-code/managed-mcp.json",
+          "  macOS:   /Library/Application Support/ClaudeCode/managed-mcp.json",
+          "  Windows: C:\\Program Files\\ClaudeCode\\managed-mcp.json",
+          "If you use an allowlist in managed settings instead, allow exactly this command (env isn't compared):",
+          `  ${JSON.stringify({ allowedMcpServers: [{ serverCommand: [command, server] }] })}`,
+          "Each project's agent is named after its folder (or AGENT_NAME / CLAUDE_PROJECT_DIR).",
+          backend === "sqlite"
+            ? "Local backend: all projects of a user share the mailbox above."
+            : `Each user needs a token file per project: ${env.AGENT_BRIDGE_TOKEN_FILE || env.SLACK_BOT_TOKEN_FILE} ({agent} = the folder name), mode 0600.`,
+        ].join("\n")
+      );
       break;
     }
 

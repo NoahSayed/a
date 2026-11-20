@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { backendFromEnv, createStore, isUuid, MESSAGE_TYPES, NetworkError } from "./store.js";
+import { backendFromEnv, createStore, isUuid, MESSAGE_TYPES, NetworkError, resolveIdentityEnv } from "./store.js";
 import { dlpModeFromEnv, dlpNotice } from "./stores/dlp.js";
 import { proxyStatus, proxyWarning } from "./proxy.js";
 
@@ -23,7 +23,7 @@ try {
   if (warning) console.error(`agent-bridge: WARNING: ${warning}`);
   store = await createStore();
   AGENT_NAME = await store.identify();
-  const wanted = (process.env.AGENT_NAME || "").trim();
+  const wanted = (resolveIdentityEnv(process.env).AGENT_NAME || "").trim();
   if (wanted && wanted !== AGENT_NAME) {
     throw new Error(`AGENT_NAME is "${wanted}" but the token belongs to agent "${AGENT_NAME}".`);
   }

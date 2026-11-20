@@ -11,8 +11,8 @@
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
-import { BridgeError } from "./stores/common.js";
+import { basename, resolve } from "node:path";
+import { AGENT_NAME_RE, BridgeError } from "./stores/common.js";
 
 export { BridgeError, NetworkError, MESSAGE_TYPES, LIMITS, AGENT_NAME_RE, isUuid } from "./stores/common.js";
 
@@ -94,7 +94,48 @@ export const readSlackToken = (env = process.env) => readSecret(env, "SLACK_BOT_
 
 const intEnv = (v) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
-export async function createStore({ env = process.env, agentName = env.AGENT_NAME, busyTimeoutMs } = {}) {
+// ------------------------------------------------------------------ managed installs
+// One machine-wide managed-mcp.json entry can serve every project: with AGENT_BRIDGE_NAME_FROM=project
+// the agent's name is its project folder's name, and "{agent}" in a token-file path becomes that name.
+// The project folder is AGENT_BRIDGE_PROJECT_DIR, else CLAUDE_PROJECT_DIR, else the working directory.
+export function agentNameFromDir(dir) {
+  const base = basename(resolve(dir || "."));
+  const name = base
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_]+/, "")
+    .slice(0, 40)
+    .replace(/-+$/, "");
+  if (!AGENT_NAME_RE.test(name)) {
+    throw new BridgeError(`Can't make an agent name from the folder "${base}". Set AGENT_NAME for this project.`);
+  }
+  return name;
+}
+
+const AGENT_PLACEHOLDER_VARS = ["AGENT_BRIDGE_TOKEN_FILE", "SLACK_BOT_TOKEN_FILE"];
+
+export function resolveIdentityEnv(env = process.env, cwd = process.cwd()) {
+  const out = { ...env };
+  const from = (env.AGENT_BRIDGE_NAME_FROM || "").trim().toLowerCase();
+  if (from && from !== "project") throw new BridgeError(`AGENT_BRIDGE_NAME_FROM must be "project", got "${from}".`);
+  if (!(out.AGENT_NAME || "").trim() && from === "project") {
+    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);
+  }
+  for (const k of AGENT_PLACEHOLDER_VARS) {
+    if (!out[k] || !out[k].includes("{agent}")) continue;
+    const name = (out.AGENT_NAME || "").trim();
+    if (!AGENT_NAME_RE.test(name)) {
+      throw new BridgeError(`${k} contains {agent} but no valid agent name is known: set AGENT_NAME or AGENT_BRIDGE_NAME_FROM=project.`);
+    }
+    out[k] = out[k].replaceAll("{agent}", name);
+  }
+  return out;
+}
+
+export async function createStore({ env: rawEnv = process.env, agentName, busyTimeoutMs } = {}) {
+  const env = resolveIdentityEnv(rawEnv);
+  agentName ??= env.AGENT_NAME;
   const backend = backendFromEnv(env);
   if (backend === "supabase") {
     const { SupabaseStore } = await import("./stores/supabase.js");
