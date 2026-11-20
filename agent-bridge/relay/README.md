@@ -21,14 +21,30 @@ npm run relay                                          # listens on 127.0.0.1:87
 | `RELAY_TLS_CERT`, `RELAY_TLS_KEY` | off | PEM files: serve HTTPS |
 | `RELAY_TLS_CA` | off | require client certificates signed by this CA (mutual TLS); needs the two above |
 | `RELAY_AUDIT_LOG` | off | append-only, hash-chained JSON Lines (see below) |
-| `RELAY_AUDIT_BODIES` | `0` | `1`: also write message bodies into the audit log |
+| `RELAY_AUDIT_BODIES` | `0` | `1`: also write message bodies into the audit log. Switches accept `1/true/yes/on` and `0/false/no/off` (any case); anything else refuses to start |
+| `RELAY_AUDIT_REQUIRED` | `0` | `1`: fail closed. A request whose audit line can't be written is refused (HTTP 503) and has no effect; needs `RELAY_AUDIT_LOG` |
 | `RELAY_MIN_RETENTION_DAYS` | `0` | purge / delete-agent refuse to remove messages younger than this |
-| `RELAY_LEGAL_HOLD` | `0` | `1`: purge and delete-agent refuse entirely |
+| `RELAY_LEGAL_HOLD` | `0` | on (`1/true/yes/on`): purge and delete-agent refuse entirely. A value that is neither on nor off refuses to start |
 | `RELAY_AUDITOR_KEY` or `_FILE` | off | a read-only key for `bridge_admin_export` (>= 32 chars, different from the admin key) |
 
 The same settings exist as flags: `--host --port --db --admin-key-file --tls-cert --tls-key --tls-ca --audit-log --audit-bodies
 --auditor-key-file --min-retention-days --legal-hold`. Request bodies are limited to 256 KB (HTTP 413). `GET /healthz` needs no key
-and answers `{"status":"ok"}` and nothing else.
+and answers `{"status":"ok"}` and nothing else (HTTP 503 `{"status":"audit log failing"}` while the audit log can't be written).
+
+Settings that are present but empty (`RELAY_TLS_CA=`, `RELAY_TLS_CERT=`, `RELAY_TLS_KEY=`, `RELAY_ADMIN_KEY_FILE=`, `RELAY_AUDITOR_KEY_FILE=`, `RELAY_AUDIT_LOG=`),
+unreadable or empty key/certificate files, and a key given both as a variable and as a `_FILE` all refuse to start. The effective posture is printed at
+startup: `TLS`, `mTLS`, `legal hold`, `minimum retention`, `audit`.
+
+Connection limits (defaults suit an internal service; put the relay behind a proxy that also limits connections if it faces anything less trusted):
+
+| Variable | Default | |
+|---|---|---|
+| `RELAY_HEADERS_TIMEOUT_MS` | `10000` | time allowed to send the complete request headers (not longer than the next one) |
+| `RELAY_REQUEST_TIMEOUT_MS` | `30000` | time allowed to send the complete request |
+| `RELAY_IDLE_TIMEOUT_MS` | `30000` | a socket that sends nothing for this long is closed (also before a TLS handshake) |
+| `RELAY_KEEPALIVE_TIMEOUT_MS` | `5000` | idle keep-alive connections |
+| `RELAY_MAX_CONNECTIONS` | `512` | more simultaneous connections are dropped. Keep it below the process's file-descriptor limit |
+| `RELAY_AUTH_FAIL_AUDIT_MAX` / `_WINDOW_MS` | `10` / `60000` | failed authentications logged per source IP and scope per window; the rest are counted in an `auth_failed.summary` line |
 
 ### Docker
 
@@ -86,7 +102,9 @@ Without the CLI: `AGENT_BRIDGE_BACKEND=relay`, `RELAY_URL`, and `AGENT_BRIDGE_TO
 `RELAY_AUDIT_LOG` gets one JSON line per event: `ts`, `action` (`send`, `deliver`, `peek`, `unmark`, `thread`,
 `admin.create_agent`, `admin.purge`, `auth_failed`, `auditor.export`, ...), the agent, message id, thread id, `from`, `to`, `type`,
 body length and SHA-256 of the body. Never the body (unless `RELAY_AUDIT_BODIES=1`), subjects, tokens or keys. Admin actions are logged
-whether they worked, failed or were refused (`outcome`).
+whether they worked, failed or were refused (`outcome`). Reads are recorded with the ids of the messages they disclosed (`peek`, `recent`, `thread`).
+Failed authentications are rate-limited per source (see above), so unauthenticated traffic can't grow the log without bound.
+Export timestamps (`--from`, `--to`) need an explicit zone (`2026-01-01T00:00:00Z`, `...+01:00`) or are a UTC date (`2026-01-01`); a date-time without a zone is refused.
 
 Each line also has `prev` (SHA-256 of the previous line's text) and `hash` (SHA-256 of the line without `hash`):
 
@@ -97,6 +115,11 @@ node cli.js verify-audit /var/log/agent-bridge/audit.jsonl     # OK (N line(s); 
 An edited, deleted or reordered line breaks the chain at the first affected line. Lines cut off the *end* are only detectable against
 a "last hash" you recorded elsewhere, so store it somewhere else periodically (WORM storage, a ticket, a syslog line). Run one relay
 process per audit file.
+
+If a write is cut short (disk full, crash), the next start (or the next write) ends the partial line and records a `chain.repair` entry
+that continues the chain; `verify-audit` accepts that junk line only when it is directly followed by the repair entry that covers it.
+With `RELAY_AUDIT_REQUIRED=1` the relay doesn't go on without its audit trail: sends are taken back, reads return nothing (claimed
+messages are handed back), admin changes are written down before they happen, and `/healthz` reports 503 until the log is writable again.
 
 `RELAY_MIN_RETENTION_DAYS=2555` makes `purge` and `delete-agent` refuse to touch younger messages. `RELAY_LEGAL_HOLD=1` makes them refuse
 entirely. Neither stops someone with shell access to the host from editing the database file: use filesystem-level controls for that.

@@ -75,6 +75,8 @@ jobs:
         run: node test/regressions-r1.js
       - name: Adversary round 2 regressions (Slack, hooks, tokens, exec-form proxy/CA)
         run: node test/regressions-r2-client.js
+      - name: Adversary round 2 regressions (relay config, timeouts, audit chain repair, export)
+        run: node test/regressions-r2-relay.js
       - name: DLP (secrets, card numbers, IBANs; block/redact/warn/off on every backend)
         run: node test/dlp.js
       - name: Corporate proxy and TLS inspection (forward proxy with its own CA)
@@ -125,5 +127,7 @@ jobs:
         run: node test/regressions-r1.js
       - name: Adversary round 2 regressions (Slack, hooks, tokens, exec-form proxy/CA)
         run: node test/regressions-r2-client.js
+      - name: Adversary round 2 regressions (relay config, timeouts, audit chain repair, export)
+        run: node test/regressions-r2-relay.js
       - name: Managed installs (Postgres part skipped)
         run: node test/managed.js
