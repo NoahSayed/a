@@ -1,0 +1,8 @@
+{
+  "adapter": "npm",
+  "ownedPaths": ["src/**", "lib/**"],
+  "ai": { "enabled": true, "model": "haiku" },
+  "policy": { "cooldownDays": 3 },
+  "checks": { "test": "npm test" },
+  "feeds": { "local": [] }
+}

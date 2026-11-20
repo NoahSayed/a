@@ -1,0 +1,11 @@
+{
+  "name": "autopatch",
+  "version": "0.2.0",
+  "description": "Watch security advisories for your npm app, Next.js site or WordPress site, stage verified fixes on a copy (AI only where code needs repairing or no fix exists), and ship only what passes.",
+  "type": "module",
+  "bin": { "autopatch": "bin/autopatch.mjs" },
+  "engines": { "node": ">=20" },
+  "license": "MIT",
+  "dependencies": { "semver": "^7.7.2" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}
