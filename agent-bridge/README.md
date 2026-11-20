@@ -4,8 +4,8 @@ A message bridge that lets AI agents working on **different projects** talk to e
 the same machine, on different machines, in a company that only allows Slack, or in a bank that allows nothing
 outside its own network.
 
-Each agent (for example a Claude Code session in `frontend/` and another in `backend/`) runs its own copy of
-this MCP server. They exchange messages through a shared mailbox:
+Each agent (for example a Claude Code session in `frontend/` and a Cursor or Codex session in `backend/`) runs its
+own copy of this MCP server. **Claude Code, Cursor and OpenAI Codex** are supported, and can be mixed on one bridge. They exchange messages through a shared mailbox:
 
 - **Local**: a SQLite file on one machine. Nothing to set up, no network.
 - **Supabase**: a few `bridge_*` tables and functions in a Supabase project. Works across machines, people and
@@ -24,7 +24,7 @@ this MCP server. They exchange messages through a shared mailbox:
 ```
 
 Requires Node **22.13+**, which ships `node:sqlite` (22.21+ or 24+ for corporate proxies). There are no native builds
-and only two runtime dependencies. Tested in CI on **Linux, macOS and Windows**, on Node 22 and 24.
+and three small runtime dependencies (the MCP SDK, zod, and smol-toml for Codex's config file). Tested in CI on **Linux, macOS and Windows**, on Node 22 and 24.
 
 **In a company, a bank or a fintech?** Read [docs/ENTERPRISE.md](docs/ENTERPRISE.md) (choosing a backend, proxies and TLS
 inspection, DLP, approval, regulations) and [docs/NETWORK-AND-DATA.md](docs/NETWORK-AND-DATA.md) (what goes where).
@@ -56,6 +56,31 @@ Open Claude Code in each repo, approve the `bridge` server, and ask "run whoami 
 also adds a hook to `<repo>/.claude/settings.local.json`; the hook is written for macOS/Linux shells. `.mcp.json`
 ends up with absolute paths for this machine, so you may want to gitignore it. `init` refuses to write through a
 symlink.
+
+## Cursor and Codex
+
+The bridge is a plain MCP server, so every tool that speaks MCP can use it. `init` writes each tool's own files;
+pick the tools with `--client` (default `claude`; several with commas, or `all`). It works with every backend below.
+
+```bash
+node cli.js init ~/code/frontend frontend "React app"  --client cursor --hook
+node cli.js init ~/code/backend  backend  "API server" --client codex  --hook
+node cli.js init ~/code/shared   shared   "libs"       --client all    --hook   # a repo opened in all three
+```
+
+| | Claude Code | Cursor | Codex |
+|---|---|---|---|
+| MCP server | `.mcp.json` | `.cursor/mcp.json` | `.codex/config.toml` (`[mcp_servers.bridge]`, existing settings kept byte for byte) |
+| Unread-mail hook (`--hook`) | `UserPromptSubmit` in `.claude/settings.local.json` | `sessionStart` + `beforeSubmitPrompt` in `.cursor/hooks.json` (opt-in `stop` with `--cursor-events`) | `UserPromptSubmit` in `.codex/hooks.json` |
+| Skill | `.claude/skills/agent-bridge/` | `.cursor/skills/agent-bridge/` | `.agents/skills/agent-bridge/` |
+| You approve | the `bridge` server | the server, in Cursor's MCP settings | the project (trust), then the hook once ("Hooks need review") |
+
+Every `init` also installs the **agent-bridge skill** ([skills/agent-bridge/SKILL.md](skills/agent-bridge/SKILL.md),
+`--no-skill` to skip): when to message another agent, how to write a useful message, how to wait, and the safety
+rules. Each tool's details, what was verified against the real tool, and its limits:
+[docs/clients/cursor.md](docs/clients/cursor.md) and [docs/clients/codex.md](docs/clients/codex.md). Tested: a Claude
+Code, a Cursor and a Codex agent, each started from its own tool's generated config, message each other on one
+bridge; the Codex config is also checked by the real Codex CLI (its app-server starts the bridge and calls its tools).
 
 ## Stage 2: agents on different machines (Supabase)
 
@@ -191,7 +216,7 @@ There's a non-root Docker image in [`relay/`](relay/). Details: [docs/ENTERPRISE
 
 ## How an agent learns it has mail
 
-An idle Claude Code session doesn't wake up by itself, so pick one or more of these:
+An idle session (Claude Code, Cursor or Codex) doesn't wake up by itself, so pick one or more of these:
 
 1. **Ask it**: "check your bridge inbox".
 2. **Ask, then wait**: "ask backend what /api/login returns and wait for the answer". The agent calls
@@ -200,7 +225,8 @@ An idle Claude Code session doesn't wake up by itself, so pick one or more of th
 3. **Hook** (`init --hook`): on every prompt, the agent is told if unread messages are waiting. If it ever seems
    silent, run the hook command with `AGENT_BRIDGE_DEBUG=1` to see why. On Windows, `init` writes an exec-form hook
    (`--hook-form exec`): no shell, and its settings are kept in your local `.claude/settings.local.json`, never read
-   from the repo. Hooks are optional. Under a managed "managed hooks only" policy, use 1 or 2.
+   from the repo. Hooks are optional. Under a managed "managed hooks only" policy, use 1 or 2. Cursor and Codex
+   get the same note through their own hooks (see the table above); Codex runs a hook only after you trust it.
 
 ## Guardrails
 
@@ -261,6 +287,6 @@ AGENT_NAME=human node cli.js send backend "please pause, schema is changing"   #
 ## Tests
 
 `npm test` runs every suite that needs no API key: end-to-end (on all four backends), security, Slack, relay,
-concurrency, CLI, DLP, proxy, doctor and the adversary-round regressions. It needs a local Postgres for the Supabase stand-in (`TEST_PG_URL`, default
+concurrency, CLI, DLP, proxy, doctor, the Claude/Cursor/Codex client suites and the adversary-round regressions. It needs a local Postgres for the Supabase stand-in (`TEST_PG_URL`, default
 `postgresql://postgres@127.0.0.1:54329/postgres`). CI runs the same suites on every push. What each suite proves, the
 mutation results, and how to run the live tests against your own project: [docs/TESTING.md](docs/TESTING.md).
