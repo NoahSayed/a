@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "n
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dlpNotice } from "./stores/dlp.js";
+import { LINE_BREAK_RUN, LINE_BREAK_SPLIT } from "./stores/common.js";
 import { CA_VAR, maskProxyUrl, nodeSupportsEnvProxy, proxyEnvForConfig, proxyUrlHasCredentials } from "./proxy.js";
 import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, readSecret, resolveDbPath, resolveIdentityEnv } from "./store.js";
 import { CLIENTS, FileTx, PEEK_ENV_KEYS, PEEK_PROCESS_KEYS, PEEK_REEXEC_GUARD, isSecretSupabaseKey } from "./clients/common.js";
@@ -110,7 +111,7 @@ function saveToken(name, token, p = tokenPath(name)) {
 const line = (m) =>
   `#${m.id} [${String(m.created_at).slice(11, 19)}] ${m.from_agent} -> ${m.to_agent} ` +
   `(${m.type}, hop ${m.hop}, thread ${String(m.thread_id).slice(0, 8)})${m.read_at ? "" : " *unread*"}\n` +
-  `    ${m.subject ? m.subject + ": " : ""}${m.body.replace(/\n/g, "\n    ")}`;
+  `    ${m.subject ? String(m.subject).replace(LINE_BREAK_RUN, " ") + ": " : ""}${m.body.split(LINE_BREAK_SPLIT).join("\n    ")}`;
 
 // Local mode shows every message on the bridge; Supabase only shows the token's own traffic.
 const listRecent = (store, opts) => (store.allRecent ? store.allRecent(opts) : store.recent(opts));

@@ -26,6 +26,7 @@ npm run relay                                          # listens on 127.0.0.1:87
 | `RELAY_MIN_RETENTION_DAYS` | `0` | purge / delete-agent refuse to remove messages younger than this |
 | `RELAY_LEGAL_HOLD` | `0` | on (`1/true/yes/on`): purge and delete-agent refuse entirely. A value that is neither on nor off refuses to start |
 | `RELAY_AUDITOR_KEY` or `_FILE` | off | a read-only key for `bridge_admin_export` (>= 32 chars, different from the admin key) |
+| `RELAY_DLP` | `block` | the relay's own server-side check of every message: `block`, `redact`, `warn` or `off`. Validated at startup (a typo refuses to start); `warn` and `off` print a warning. The relay does **not** read `AGENT_BRIDGE_DLP` (that is the clients' setting; if it is set in the relay's environment the relay says it is ignored), so a stray shell variable can't weaken the server |
 
 The same settings exist as flags: `--host --port --db --admin-key-file --tls-cert --tls-key --tls-ca --audit-log --audit-bodies
 --auditor-key-file --min-retention-days --legal-hold`. Request bodies are limited to 256 KB (HTTP 413). `GET /healthz` needs no key
@@ -33,7 +34,7 @@ and answers `{"status":"ok"}` and nothing else (HTTP 503 `{"status":"audit log f
 
 Settings that are present but empty (`RELAY_TLS_CA=`, `RELAY_TLS_CERT=`, `RELAY_TLS_KEY=`, `RELAY_ADMIN_KEY_FILE=`, `RELAY_AUDITOR_KEY_FILE=`, `RELAY_AUDIT_LOG=`),
 unreadable or empty key/certificate files, and a key given both as a variable and as a `_FILE` all refuse to start. The effective posture is printed at
-startup: `TLS`, `mTLS`, `legal hold`, `minimum retention`, `audit`.
+startup: `TLS`, `mTLS`, `legal hold`, `minimum retention`, `audit`, `auditor key`, `DLP` and the `connections` limits.
 
 Connection limits (defaults suit an internal service; put the relay behind a proxy that also limits connections if it faces anything less trusted):
 
@@ -44,7 +45,11 @@ Connection limits (defaults suit an internal service; put the relay behind a pro
 | `RELAY_IDLE_TIMEOUT_MS` | `30000` | a socket that sends nothing for this long is closed (also before a TLS handshake) |
 | `RELAY_KEEPALIVE_TIMEOUT_MS` | `5000` | idle keep-alive connections |
 | `RELAY_MAX_CONNECTIONS` | `512` | more simultaneous connections are dropped. Keep it below the process's file-descriptor limit |
-| `RELAY_AUTH_FAIL_AUDIT_MAX` / `_WINDOW_MS` | `10` / `60000` | failed authentications logged per source IP and scope per window; the rest are counted in an `auth_failed.summary` line |
+| `RELAY_MAX_CONNECTIONS_PER_IP` | `32` | one source address's share of `RELAY_MAX_CONNECTIONS` (an IPv6 address counts as its whole /64, an IPv4-mapped one as IPv4); more are dropped, so one client holding idle sockets can't lock out the others. A client that pools connections can briefly hold more sockets than it has requests running |
+| `RELAY_AUTH_FAIL_AUDIT_MAX` / `_WINDOW_MS` | `10` / `60000` | failed authentications logged per source IP and scope per window; the rest are counted in an `auth_failed.summary` line. At most 10,000 sources are tracked at once: when the table is full the oldest is evicted (with its own summary line), so a new source is always logged under its own address, even after a spray from thousands of other addresses |
+
+Behind a reverse proxy (or any NAT) every client shares the proxy's address: the per-address share, the auth-failure attribution and the audit
+`ip` field then name the proxy. Limit connections per client at the proxy, and raise `RELAY_MAX_CONNECTIONS_PER_IP` for it.
 
 ### Docker
 
@@ -120,6 +125,10 @@ If a write is cut short (disk full, crash), the next start (or the next write) e
 that continues the chain; `verify-audit` accepts that junk line only when it is directly followed by the repair entry that covers it.
 With `RELAY_AUDIT_REQUIRED=1` the relay doesn't go on without its audit trail: sends are taken back, reads return nothing (claimed
 messages are handed back), admin changes are written down before they happen, and `/healthz` reports 503 until the log is writable again.
+If the line that records an admin change's *outcome* can't be written after the change was made, the answer is not "refused": it is HTTP 500,
+code `AB001`, "the change was applied, but its outcome could not be written to the audit log", with `details: {"applied": true, "result": ...}`
+(for `create_agent` and `rotate_token` the new token is in `result`, so it isn't lost). Don't repeat the request; the log holds the attempt
+line (and an `applied_unaudited` line if it can be written), so the trail shows what was intended and that the outcome is unrecorded.
 
 `RELAY_MIN_RETENTION_DAYS=2555` makes `purge` and `delete-agent` refuse to touch younger messages. `RELAY_LEGAL_HOLD=1` makes them refuse
 entirely. Neither stops someone with shell access to the host from editing the database file: use filesystem-level controls for that.

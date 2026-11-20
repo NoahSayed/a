@@ -19,7 +19,9 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { SqliteStore } from "./stores/sqlite.js";
+import net from "node:net";
 import { AGENT_NAME_RE, BridgeError, DEFAULT_ABUSE_LIMITS, charLength, isUuid } from "./stores/common.js";
+import { DLP_MODES, dlpModeFromEnv } from "./stores/dlp.js";
 import { expandHome } from "./store.js";
 import { AuditError, AuditLog } from "./relay-audit.js";
 
@@ -109,6 +111,8 @@ export const DEFAULT_LIMITS = {
   idleTimeoutMs: 30_000, // a socket that sends nothing for this long is closed (also before the TLS handshake)
   keepAliveTimeoutMs: 5_000,
   maxConnections: 512,
+  maxConnectionsPerIp: 32, // one source address's share of maxConnections (IPv6: per /64); R3-09
+  authFailAuditSources: 10_000, // source/scope pairs tracked at once; when full the oldest is evicted (R3-08)
   authFailAuditMax: 10, // audit lines per source IP and scope per window; the rest are counted in a summary line
   authFailAuditWindowMs: 60_000,
 };
@@ -205,6 +209,8 @@ export function loadConfig(env = process.env, argv = []) {
     idleTimeoutMs: intSetting(e, "RELAY_IDLE_TIMEOUT_MS", D.idleTimeoutMs),
     keepAliveTimeoutMs: intSetting(e, "RELAY_KEEPALIVE_TIMEOUT_MS", D.keepAliveTimeoutMs),
     maxConnections: intSetting(e, "RELAY_MAX_CONNECTIONS", D.maxConnections),
+    maxConnectionsPerIp: intSetting(e, "RELAY_MAX_CONNECTIONS_PER_IP", D.maxConnectionsPerIp),
+    authFailAuditSources: D.authFailAuditSources,
     authFailAuditMax: intSetting(e, "RELAY_AUTH_FAIL_AUDIT_MAX", D.authFailAuditMax),
     authFailAuditWindowMs: intSetting(e, "RELAY_AUTH_FAIL_AUDIT_WINDOW_MS", D.authFailAuditWindowMs),
   };
@@ -212,9 +218,25 @@ export function loadConfig(env = process.env, argv = []) {
     throw new RelayConfigError("RELAY_HEADERS_TIMEOUT_MS can't be longer than RELAY_REQUEST_TIMEOUT_MS");
   }
 
+  // The relay's own DLP mode (server-side enforcement). Not AGENT_BRIDGE_DLP: that is a client setting, and a
+  // variable that happens to be set in the relay's shell must not weaken the server (R3-18).
+  const warnings = [];
+  let dlp;
+  try {
+    dlp = dlpModeFromEnv({ AGENT_BRIDGE_DLP: e.RELAY_DLP });
+  } catch {
+    throw new RelayConfigError(`RELAY_DLP must be one of ${DLP_MODES.join(", ")}, got "${String(e.RELAY_DLP).trim().toLowerCase().slice(0, 40)}"`);
+  }
+  if (e.AGENT_BRIDGE_DLP?.trim()) warnings.push(`AGENT_BRIDGE_DLP is set in the relay's environment and is ignored: the relay's DLP mode is RELAY_DLP (now ${dlp}).`);
+  if (dlp === "warn" || dlp === "off") {
+    warnings.push(`RELAY_DLP=${dlp}: the relay ${dlp === "off" ? "scans nothing" : "lets messages with secrets or card numbers through (the sender is only told)"}. The default is block.`);
+  }
+
   return {
     adminKey,
     auditorKey,
+    dlp,
+    warnings,
     minRetentionDays,
     legalHold: parseSwitch("RELAY_LEGAL_HOLD", e.RELAY_LEGAL_HOLD),
     host: (e.RELAY_HOST || "127.0.0.1").trim(),
@@ -238,6 +260,8 @@ export function describePosture(config) {
     `minimum retention: ${config.minRetentionDays} day(s)`,
     `audit: ${audit}`,
     `auditor key: ${config.auditorKey ? "set" : "off"}`,
+    `DLP: ${config.dlp === "warn" || config.dlp === "off" ? config.dlp.toUpperCase() : config.dlp}`,
+    `connections: ${config.limits?.maxConnections ?? DEFAULT_LIMITS.maxConnections} total, ${config.limits?.maxConnectionsPerIp ?? DEFAULT_LIMITS.maxConnectionsPerIp} per address`,
   ].join(", ");
 }
 
@@ -362,22 +386,45 @@ const lenCheck = (v, max, constraint) => {
 };
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
+// The key a source address is counted under for connection shares: an IPv4-mapped IPv6 address is the IPv4
+// address, and an IPv6 address stands for its whole /64 (one subscriber typically owns a /64, so counting single
+// addresses would let one client use 2^64 of them). IPv4 addresses are counted one by one.
+export function sourceKey(ip) {
+  const a = String(ip ?? "").split("%")[0].toLowerCase();
+  if (!a) return "?";
+  const mapped = a.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return mapped[1];
+  if (!net.isIPv6(a)) return a;
+  const [head, tail] = a.split("::");
+  const groups = (s) => (s ? s.split(":").flatMap((g) => (g.includes(".") ? ["0", "0"] : [g])) : []);
+  const h = groups(head);
+  const t = tail === undefined ? [] : groups(tail);
+  const all = tail === undefined ? h : [...h, ...Array(Math.max(8 - h.length - t.length, 0)).fill("0"), ...t];
+  return all.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":") + "::/64";
+}
+
 // Failed authentications are the one audit event an unauthenticated client can produce at will. Per source IP
 // and scope, the first `max` in a window are logged one by one; the rest are only counted, and the count is
 // written as an `auth_failed.summary` line when the window ends. So there is always at least one line per
 // source per window, and the log grows by a bounded amount however hard it is hammered.
+// The table of sources is bounded (authFailAuditSources). When it is full the OLDEST entry is evicted (with its
+// own summary line) to make room, so a source that has not been seen yet always gets its own entry and its first
+// failures are always logged under its own address. An attacker who sprays addresses can only push others out
+// of the table; it can't make a later source anonymous (R3-08). The cost is bounded by the table size and by what
+// the spray itself writes: one line per new source (up to `max`), which is the price of attributing each one.
 class AuthFailAudit {
-  constructor(audit, { authFailAuditMax, authFailAuditWindowMs }) {
+  constructor(audit, { authFailAuditMax, authFailAuditWindowMs, authFailAuditSources }) {
     this.audit = audit;
     this.max = authFailAuditMax;
     this.windowMs = authFailAuditWindowMs;
+    this.maxSources = authFailAuditSources;
     this.entries = new Map();
     this.timer = setInterval(() => this.flush(), Math.min(this.windowMs, 5000));
     this.timer.unref();
   }
   record(scope, fn, ip) {
     const now = Date.now();
-    let k = `${ip}|${scope}`;
+    const k = `${ip}|${scope}`;
     let e = this.entries.get(k);
     if (e && now - e.start >= this.windowMs) {
       this.#summarize(e);
@@ -385,15 +432,15 @@ class AuthFailAudit {
       e = undefined;
     }
     if (!e) {
-      // bound the memory an address-spraying client can use: past 10,000 sources they share one counter per scope
-      if (this.entries.size >= 10_000) {
-        k = `*|${scope}`;
-        e = this.entries.get(k);
+      // bound the memory an address-spraying client can use: make room by evicting the oldest source (a Map
+      // iterates in insertion order, and an entry is only ever inserted when its window starts)
+      if (this.entries.size >= this.maxSources) {
+        const [oldKey, old] = this.entries.entries().next().value;
+        this.#summarize(old);
+        this.entries.delete(oldKey);
       }
-      if (!e) {
-        e = { start: now, kept: 0, suppressed: 0, scope, ip: k.startsWith("*|") ? "(many)" : ip };
-        this.entries.set(k, e);
-      }
+      e = { start: now, kept: 0, suppressed: 0, scope, ip };
+      this.entries.set(k, e);
     }
     if (e.kept < this.max) {
       e.kept++;
@@ -428,9 +475,20 @@ export async function startRelay(config) {
   const audit = new AuditLog(config.auditLog, config.auditBodies, { required: !!config.auditRequired });
   const lim = { ...DEFAULT_LIMITS, ...config.limits };
   const authFails = new AuthFailAudit(audit, lim);
+  // The outcome line of an admin change that has already happened. If it can't be written (RELAY_AUDIT_REQUIRED),
+  // the AuditError carries the result, so the answer can say what is true: applied, but not audited (R3-16).
+  const adminDone = (entry, result) => {
+    try {
+      audit.write({ outcome: "ok", ...entry });
+    } catch (e) {
+      if (e instanceof AuditError) e.result = result === undefined ? null : result;
+      throw e;
+    }
+    return result;
+  };
   // One SQLite connection owns the database. Messages go through SqliteStore (the same code the local
   // backend runs); the relay adds its own agents and settings tables next to the messages table.
-  const core = new SqliteStore({ agentName: "relay", dbPath: config.dbPath, busyTimeoutMs: 10000 });
+  const core = new SqliteStore({ agentName: "relay", dbPath: config.dbPath, busyTimeoutMs: 10000, dlpMode: config.dlp });
   const db = core.db;
   db.exec(`
     CREATE TABLE IF NOT EXISTS relay_agents (
@@ -621,8 +679,7 @@ export async function startRelay(config) {
             nowIso()
           );
         });
-        audit.write({ outcome: "ok", action: "admin.create_agent", agent: a.p_name });
-        return token;
+        return adminDone({ action: "admin.create_agent", agent: a.p_name }, token);
       },
     },
     // Issues a new token (the old one stops working) and un-revokes the agent.
@@ -633,8 +690,7 @@ export async function startRelay(config) {
         const token = newToken();
         const r = db.prepare(`UPDATE relay_agents SET token_hash = ?, revoked_at = NULL WHERE name = ?`).run(sha256hex(token), a.p_name);
         if (!r.changes) throw userError(`Unknown agent "${a.p_name}".`);
-        audit.write({ outcome: "ok", action: "admin.rotate_token", agent: a.p_name });
-        return token;
+        return adminDone({ action: "admin.rotate_token", agent: a.p_name }, token);
       },
     },
     bridge_admin_revoke_agent: {
@@ -644,7 +700,7 @@ export async function startRelay(config) {
       run: (_, a) => {
         const r = db.prepare(`UPDATE relay_agents SET revoked_at = ? WHERE name = ?`).run(nowIso(), a.p_name);
         if (!r.changes) throw userError(`Unknown agent "${a.p_name}".`);
-        audit.write({ outcome: "ok", action: "admin.revoke_agent", agent: a.p_name });
+        adminDone({ action: "admin.revoke_agent", agent: a.p_name });
       },
     },
     // Removes an agent and every message it sent or received.
@@ -668,8 +724,7 @@ export async function startRelay(config) {
           if (!r.changes) throw userError(`Unknown agent "${a.p_name}".`);
           return Number(del.changes);
         });
-        audit.write({ outcome: "ok", action: "admin.delete_agent", agent: a.p_name, messages: n });
-        return n;
+        return adminDone({ action: "admin.delete_agent", agent: a.p_name, messages: n }, n);
       },
     },
     bridge_admin_set_limits: {
@@ -693,8 +748,7 @@ export async function startRelay(config) {
           next.max_unread_per_sender,
           next.max_bytes_per_day
         );
-        audit.write({ outcome: "ok", action: "admin.set_limits", ...next });
-        return next;
+        return adminDone({ action: "admin.set_limits", ...next }, next);
       },
     },
     bridge_admin_purge: {
@@ -710,8 +764,7 @@ export async function startRelay(config) {
         }
         const cutoff = new Date(Date.now() - ms).toISOString();
         const n = Number(db.prepare(`DELETE FROM messages WHERE created_at < ?`).run(cutoff).changes);
-        audit.write({ outcome: "ok", action: "admin.purge", older_than_ms: ms, messages: n });
-        return n;
+        return adminDone({ action: "admin.purge", older_than_ms: ms, messages: n }, n);
       },
     },
     // ---- auditor (the apikey header must be the auditor key; nothing else works for it)
@@ -849,6 +902,7 @@ export async function startRelay(config) {
       return sendError(res, 401, "42501", `permission denied for function ${fnName}`);
     }
     const args = {};
+    let started = false; // fn.run has begun: for an admin function an AuditError from it means the change happened
     try {
       for (const [k, [type]] of Object.entries(fn.args)) args[k] = COERCE[type](Object.hasOwn(body, k) ? body[k] : null);
       let me = null;
@@ -865,6 +919,7 @@ export async function startRelay(config) {
         // refused by its own audit write, and a send is taken back if that write fails)
         if (fn.admin) audit.write({ action: `admin.${fnName.slice("bridge_admin_".length)}`, outcome: "attempt", ...(args.p_name != null ? { agent: args.p_name } : {}) });
       }
+      started = true;
       const out = await fn.run(me, args, body);
       if (fn.void) return send(res, 204);
       return send(res, 200, out === undefined ? null : out);
@@ -880,6 +935,19 @@ export async function startRelay(config) {
           },
           { strict: false }
         );
+      }
+      if (e instanceof AuditError && started && fn.admin && !fn.auditor) {
+        // The intent line is in the log and the change was made; only the outcome line is missing. Don't say
+        // "refused": say what is true, and hand over the result (a new token would otherwise be lost) (R3-16).
+        console.error(`relay: ${fnName} was applied but its outcome could not be audited: ${e.message}`);
+        audit.write(
+          { action: `admin.${fnName.slice("bridge_admin_".length)}`, outcome: "applied_unaudited", ...(args.p_name != null ? { agent: args.p_name } : {}), note: "the ok line could not be written" },
+          { strict: false }
+        );
+        return sendError(res, 500, "AB001", "the change was applied, but its outcome could not be written to the audit log (RELAY_AUDIT_REQUIRED): do not repeat the request", {
+          details: { applied: true, result: e.result ?? null },
+          hint: "The audit log has this request's attempt line only. Make the audit log writable and check it; for a new token the result is in details (or rotate again).",
+        });
       }
       if (e instanceof AuditError) {
         console.error(`relay: ${fnName} refused: ${e.message}`);
@@ -918,6 +986,24 @@ export async function startRelay(config) {
   server.timeout = lim.idleTimeoutMs; // no 'timeout' listener: Node destroys the socket
   server.maxConnections = lim.maxConnections;
   server.maxHeadersCount = 50;
+  // One source address may hold only its share of the connection budget, so a client that opens hundreds of idle
+  // sockets can't make the relay refuse everyone else (R3-09). Behind a reverse proxy every client has the proxy's
+  // address: set the limit there, and raise this one (relay/README.md).
+  const perSource = new Map();
+  server.on("connection", (sock) => {
+    const k = sourceKey(sock.remoteAddress);
+    const count = perSource.get(k) ?? 0;
+    if (count >= lim.maxConnectionsPerIp) {
+      sock.destroy();
+      return;
+    }
+    perSource.set(k, count + 1);
+    sock.once("close", () => {
+      const left = (perSource.get(k) ?? 1) - 1;
+      if (left > 0) perSource.set(k, left);
+      else perSource.delete(k);
+    });
+  });
 
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -927,6 +1013,7 @@ export async function startRelay(config) {
   return {
     server,
     audit,
+    authFails,
     core,
     port,
     url: `${config.tls ? "https" : "http"}://${config.host}:${port}`,
@@ -957,6 +1044,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       console.error("relay: WARNING: listening on a non-loopback address without TLS; tokens cross the network in clear text.");
     }
     console.log(`relay: security posture: ${describePosture(config)}`);
+    for (const w of config.warnings ?? []) console.error(`relay: WARNING: ${w}`);
     console.log(
       `agent-bridge relay listening on ${relay.url} (db ${config.dbPath}${config.auditLog ? ", audit log " + config.auditLog : ""})`
     );

@@ -133,9 +133,9 @@ const MUTATIONS = [
   },
   // ---- adversary round 1 fixes (test/regressions-r1.js)
   { name: "R1-04 body lines not prefixed", file: "server.js",
-    find: `    ...String(m.body).split("\\n").map((l) => BODY_PREFIX + l),`, replace: `    String(m.body),`, suite: R1 },
+    find: `    ...String(m.body).split(LINE_BREAK_SPLIT).map((l) => BODY_PREFIX + l),`, replace: `    String(m.body),`, suite: R1 },
   { name: "R1-04 client allows multi-line subject", file: "stores/common.js",
-    find: `    if (/[\\r\\n]/.test(subject)) throw new BridgeError("subject must be a single line.");`, replace: ``, suite: R1 },
+    find: `    if (hasLineBreak(subject)) throw new BridgeError("subject must be a single line.");`, replace: ``, suite: R1 },
   { name: "R1-04 SQL allows multi-line subject", file: MIGRATION,
     find: `  constraint bridge_messages_subject_one_line check (subject is null or subject !~ '[\\r\\n]')\n`, replace: `\n`, suite: R1 },
   { name: "R1-02 SQL lets a member add a third agent", file: MIGRATION,
@@ -743,7 +743,7 @@ const MUTATIONS = [
 ];
 
 // Client-specific mutations live next to their suites (test/mutations-<client>.js, default export: an array).
-for (const c of ["codex", "cursor"]) {
+for (const c of ["codex", "cursor", "r3-relay"]) {
   const url = new URL(`./mutations-${c}.js`, import.meta.url);
   if (existsSync(fileURLToPath(url))) MUTATIONS.push(...(await import(url)).default);
 }

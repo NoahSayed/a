@@ -6,6 +6,14 @@ import { applyDlp, dlpModeFromEnv } from "./dlp.js";
 export const MESSAGE_TYPES = ["request", "response", "fyi"];
 export const LIMITS = { body: 50000, subject: 200, maxHopsCap: 100 };
 export const AGENT_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+// Everything a terminal, a log viewer or a tokenizer may treat as the end of a line: CR, LF, VT, FF, the C1 NEL, the
+// Unicode line and paragraph separators, and the ASCII separators FS GS RS (which Python's splitlines also splits on).
+// Messages are shown with every body line prefixed, and subjects must stay on one line, on ALL of these (R3-12).
+const LINE_BREAK_CHARS = "\\n\\v\\f\\u0085\\u2028\\u2029\\u001c-\\u001e";
+// A CR that is followed by LF is the first half of a CRLF and stays on its line (the LF ends it), as before.
+export const LINE_BREAK_SPLIT = new RegExp(`\\r(?!\\n)|[${LINE_BREAK_CHARS}]`);
+export const LINE_BREAK_RUN = new RegExp(`[\\r${LINE_BREAK_CHARS}]+`, "g");
+export const hasLineBreak = (s) => new RegExp(`[\\r${LINE_BREAK_CHARS}]`).test(s);
 
 // Abuse limits per sending agent (R1-03). Supabase keeps them in bridge_settings; the local
 // backend reads these defaults, overridable with AGENT_BRIDGE_RATE_PER_MIN,
@@ -83,7 +91,7 @@ export function validateOutgoing({ from, to, body, type, subject, threadId }, {
   if (charLength(body) > maxBody) throw new BridgeError(`body is too long (max ${maxBody} characters).`);
   if (subject != null) {
     if (charLength(subject) > LIMITS.subject) throw new BridgeError(`subject is too long (max ${LIMITS.subject} characters).`);
-    if (/[\r\n]/.test(subject)) throw new BridgeError("subject must be a single line.");
+    if (hasLineBreak(subject)) throw new BridgeError("subject must be a single line.");
   }
   if (threadId != null && !isThreadId(threadId))
     throw new BridgeError(`Unknown thread_id ${threadId}. Omit it to start a new thread.`);
