@@ -332,7 +332,7 @@ await test("R2-15 a dripping client (a header byte every 300 ms) is cut by the h
 
 await test("R2-15 /healthz stays up under a burst of idle connections, and the connection cap holds", async () => {
   const cap = 60;
-  const r = await relayWith({ RELAY_IDLE_TIMEOUT_MS: "1500", RELAY_HEADERS_TIMEOUT_MS: "1500", RELAY_MAX_CONNECTIONS: String(cap) });
+  const r = await relayWith({ RELAY_IDLE_TIMEOUT_MS: "1500", RELAY_HEADERS_TIMEOUT_MS: "1500", RELAY_MAX_CONNECTIONS: String(cap), RELAY_MAX_CONNECTIONS_PER_IP: "1000" }); // this test is about the global cap (the per-address share is R3-09)
   try {
     const held = [];
     for (let i = 0; i < 40; i++) held.push(await openSock(r.port));

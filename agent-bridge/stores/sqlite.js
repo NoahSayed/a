@@ -42,7 +42,8 @@ const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 
 export class SqliteStore {
-  constructor({ agentName, dbPath, busyTimeoutMs = 10000, limits = {} }) {
+  // dlpMode: set by the relay (its own, validated setting); unset means "from AGENT_BRIDGE_DLP" as for any client.
+  constructor({ agentName, dbPath, busyTimeoutMs = 10000, limits = {}, dlpMode = undefined }) {
     try {
       validateAgentName(agentName, "AGENT_NAME"); // R1-09
     } catch (e) {
@@ -52,6 +53,7 @@ export class SqliteStore {
     this.dbPath = dbPath;
     this.pollIntervalMs = 1000;
     this.limits = { ...DEFAULT_ABUSE_LIMITS, ...limits };
+    this.dlpMode = dlpMode;
 
     // The mailbox holds other projects' messages: keep it private to this user (R1-07).
     // Only a directory we create is chmod'ed; a directory the user chose is left alone.
@@ -198,7 +200,7 @@ export class SqliteStore {
   }
 
   async send({ to, body, type = "request", subject = null, threadId = null, maxHops = 20 }) {
-    const checked = validateOutgoing({ from: this.agent, to, body, type, subject, threadId });
+    const checked = validateOutgoing({ from: this.agent, to, body, type, subject, threadId }, this.dlpMode ? { dlpMode: this.dlpMode } : {});
     ({ body, subject } = checked); // DLP may have redacted them
     const row = this.tx(() => {
       this.checkAbuseLimits(to, body);

@@ -354,6 +354,13 @@ await test("R3-15 still works: real secrets are found, ordinary text passes", as
 });
 
 // ------------------------------------------------------------------------------------ R3-01 for the new code
+await test("R3-15 an all-digit UUID (a thread id) is not a card; a real card next to one still is", async () => {
+  for (const t of ["thread 11111111-2222-3333-4444-555555555555 | hop 1", "id=00000000-0000-0000-4111-111111111111."])
+    assert.deepEqual(kinds(t), [], t);
+  assert.deepEqual(kinds("thread 11111111-2222-3333-4444-555555555555 card 4111 1111 1111 1111"), ["payment-card"]);
+  assert.deepEqual(kinds("ref 1-4111 1111 1111 1111"), ["payment-card"]);
+});
+
 await test("the new scanners stay linear: 50,000 characters of adversarial text each scan in under 300 ms", async () => {
   const nasty = [
     rep(BEGIN + "\\n", 1800),

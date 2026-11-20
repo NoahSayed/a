@@ -390,7 +390,13 @@ const CARD_SEP = /^[ \t\r\n.\-/_\u2028\u2029]{1,2}$/;
 const ID_KEY = /(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])?(?:id|ids|uid|guid|uuid|ts|time|timestamp|epoch|nonce)\\?["']?\s{0,3}(?:[:=]|is)\s{0,3}#?\\?["']?$/i;
 const ID_KEY_CAMEL = /[a-z0-9]Id\\?["']?\s{0,3}[:=]\s{0,3}#?\\?["']?$/;
 
+// UUIDs (8-4-4-4-12 hex) are never cards, even all-digit ones such as thread ids: a card window can start
+// inside the chain (`...-4444-555555555555`), where the chain-start checks don't apply.
+const UUID = /(?<![0-9A-Fa-f-])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f-])/g;
+
 function* cardFindings(text) {
+  const uuids = [...text.matchAll(UUID)].map((m) => [m.index, m.index + m[0].length]);
+  const inUuid = (s, e) => uuids.some(([us, ue]) => s >= us && e <= ue);
   const runs = [];
   for (const m of text.matchAll(/\d+/g)) runs.push({ s: m.index, e: m.index + m[0].length });
   let i = 0;
@@ -413,6 +419,7 @@ function* cardFindings(text) {
       let num = "";
       for (let k = i; k <= j; k++) num += text.slice(runs[k].s, runs[k].e);
       if (!isCardNumber(num)) continue;
+      if (inUuid(first, last)) continue;
       if (j === i) {
         const lead = text.slice(Math.max(0, first - 40), first);
         if (ID_KEY.test(lead) || ID_KEY_CAMEL.test(lead)) continue;

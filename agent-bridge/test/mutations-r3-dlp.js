@@ -127,4 +127,5 @@ export default [
   { name: "R3-15 file paths are secrets", file: F, find: `  if (PATHLIKE.test(v) || WORD_IDENT.test(v)) return false;`, replace: `  if (WORD_IDENT.test(v)) return false;`, suite: R },
   { name: "R3-15 lowercase snake_case identifiers are secrets", file: F, find: `  if (PATHLIKE.test(v) || WORD_IDENT.test(v)) return false;`, replace: `  if (PATHLIKE.test(v)) return false;`, suite: R },
   { name: "R3-15 identifiers ending in _1 are secrets", file: F, find: String.raw`(?:[_-](?:[a-z]+\d{0,2}|\d{1,2}))+$/;`, replace: String.raw`(?:[_-](?:[a-z]+\d{0,2}))+$/;`, suite: R },
+  { name: "R3-15 an all-digit UUID is read as a card", file: "stores/dlp.js", find: `      if (inUuid(first, last)) continue;\n`, replace: ``, suite: ["test/regressions-r3-dlp.js"] },
 ];
