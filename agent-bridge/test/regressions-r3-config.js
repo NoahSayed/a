@@ -8,7 +8,7 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { relayLocalBackend } from "./backends.js";
@@ -433,8 +433,9 @@ try {
     const err = run({ RELAY_TLS_CA: "~/no-such-ca.pem" });
     assert.match(err, /^ERR /);
     assert.ok(err.includes("RELAY_TLS_CA") && err.includes(join(HOME, "no-such-ca.pem")), err);
+    // An absolute path is reported as resolved (on Windows "/x" becomes "D:\\x").
     const err2 = run({ RELAY_TLS_CLIENT_KEY: "/definitely/not/here.key" });
-    assert.ok(err2.includes("RELAY_TLS_CLIENT_KEY") && err2.includes("/definitely/not/here.key"), err2);
+    assert.ok(err2.includes("RELAY_TLS_CLIENT_KEY") && err2.includes(resolve("/definitely/not/here.key")), err2);
   });
 
   await test("R3-17 the server's startup error for an unreadable RELAY_TLS_* file names the variable and the path", async () => {
