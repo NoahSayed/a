@@ -139,6 +139,15 @@ export const npmAdapter = {
 
   async applyAction(ctx, dir, a) {
     if (a.kind === 'update') {
+      const pj = readJson(path.join(dir, 'package.json'));
+      const direct = ['dependencies', 'devDependencies', 'optionalDependencies'].some((k) => pj[k]?.[a.pkg]);
+      if (!direct && !a.tarball) {
+        // transitive package (e.g. next's postcss): pin it with an npm "overrides" entry instead of adding a direct dependency
+        pj.overrides = { ...(pj.overrides || {}), [a.pkg]: a.version };
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pj, null, 2) + '\n');
+        const r = sh('npm', ['install', '--no-audit', '--no-fund'], { cwd: dir });
+        return { ok: r.code === 0, log: r.out + r.err };
+      }
       const spec = a.tarball || `${a.pkg}@${a.version}`;
       const r = sh('npm', ['install', spec, '--save-exact', '--no-audit', '--no-fund'], { cwd: dir });
       return { ok: r.code === 0, log: r.out + r.err };

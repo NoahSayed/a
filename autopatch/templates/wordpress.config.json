@@ -1,0 +1,26 @@
+{
+  "adapter": "wordpress",
+  "ownedPaths": ["wp-content/themes/<theme>/**", "wp-content/mu-plugins/**"],
+  "protectedPaths": ["wp-config.php", "autopatch.config.json", "autopatch-probes/**", ".autopatch/**"],
+  "ai": { "enabled": true, "model": "haiku" },
+  "policy": { "cooldownDays": 3 },
+  "server": {
+    "wpCli": "/path/to/wp-cli.phar",
+    "port": 8300,
+    "prodPort": 8301,
+    "serve": "php-builtin",
+    "staging": { "dbMode": "file-copy" },
+    "wordfenceFeed": "remote",
+    "releases": null
+  },
+  "checks": {
+    "restartCheck": true,
+    "pages": [{ "path": "/" }, { "path": "/wp-login.php" }],
+    "flows": [
+      { "name": "contact form sends", "method": "POST", "path": "/wp-admin/admin-ajax.php", "form": { "action": "my_contact_send", "message": "hello" }, "expect": { "includes": "\"success\":true" } }
+    ],
+    "probes": [
+      { "finding": "<plugin-slug or advisory id>", "script": "autopatch-probes/<slug>.mjs" }
+    ]
+  }
+}

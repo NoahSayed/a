@@ -20,6 +20,7 @@ export default {
   logTail(ctx, dir) -> string,           // recent errors for the AI repair prompt (build output, PHP log, ...)
   hotfixHint(ctx, finding) -> string,    // where a hotfix belongs (e.g. "wp-content/mu-plugins/hotfix-<slug>.php")
   async promote(ctx, actions) -> { ok, details },
+  diffIgnore: ['.ht.sqlite'],            // optional: file names the checks themselves write; excluded from the "AI touched files" diff
 };
 ```
 

@@ -1,0 +1,39 @@
+{
+  "adapter": "wordpress",
+  "ownedPaths": ["wp-content/themes/bakery/**", "wp-content/mu-plugins/**"],
+  "protectedPaths": ["wp-config.php", "autopatch.config.json", "autopatch-probes/**", ".autopatch/**"],
+  "ai": { "enabled": true, "model": "haiku", "maxTurns": 40 },
+  "policy": { "cooldownDays": 3 },
+  "server": {
+    "wpCli": "../wplab/wp-cli.phar",
+    "port": 8300,
+    "prodPort": 8301,
+    "serve": "php-builtin",
+    "staging": { "dbMode": "file-copy" },
+    "wordfenceFeed": "/home/user/a/autopatch-lab/wordpress/feed/vulns.json",
+    "releases": "../wplab/repo"
+  },
+  "checks": {
+    "restartCheck": true,
+    "pages": [
+      { "path": "/" },
+      { "path": "/?pagename=contact" },
+      { "path": "/?pagename=gallery" },
+      { "path": "/?pagename=newsletter" },
+      { "path": "/?pagename=about" },
+      { "path": "/wp-login.php" }
+    ],
+    "flows": [
+      { "name": "home shows featured cakes", "path": "/", "expect": { "minCount": { "text": "featured-img", "n": 3 } } },
+      { "name": "gallery shows images", "path": "/?pagename=gallery", "expect": { "minCount": { "text": "sg-img", "n": 3 } } },
+      { "name": "contact form sends", "method": "POST", "path": "/wp-admin/admin-ajax.php", "form": { "action": "qc_send", "name": "Gate", "message": "hello" }, "expect": { "includes": "\"success\":true" } },
+      { "name": "newsletter subscribe", "method": "POST", "path": "/wp-admin/admin-ajax.php", "form": { "action": "of_subscribe", "email": "gate@example.invalid" }, "expect": { "includes": "\"success\":true" } },
+      { "name": "form draft autosave", "method": "POST", "path": "/wp-admin/admin-ajax.php", "form": { "action": "of_save_field", "key": "of_draft_77", "value": "half-filled" }, "expect": { "includes": "\"success\":true" } }
+    ],
+    "probes": [
+      { "finding": "quick-contact", "script": "autopatch-probes/quick-contact.mjs" },
+      { "finding": "simple-gallery", "script": "autopatch-probes/simple-gallery.mjs" },
+      { "finding": "old-forms", "script": "autopatch-probes/old-forms.mjs" }
+    ]
+  }
+}

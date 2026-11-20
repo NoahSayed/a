@@ -42,7 +42,11 @@ function scripts(dir) {
 /** Compare old vs new unpacked release directories. */
 export function releaseCheck(oldDir, newDir) {
   const a = scan(oldDir), b = scan(newDir);
-  const intro = (bucket) => Object.keys(b[bucket]).filter((k) => b[bucket][k] > a[bucket][k]);
+  // Large frameworks (next: ~250 hits in 14.x) change these counts with every release, so for a big old release a
+  // pattern must more than double (plus a margin) to count; small packages still flag any increase.
+  const total = (x) => Object.values(x.runtime).concat(Object.values(x.tooling)).reduce((n, v) => n + v, 0);
+  const allow = (old) => (total(a) >= 100 ? old * 2 + 10 : old);
+  const intro = (bucket) => Object.keys(b[bucket]).filter((k) => b[bucket][k] > allow(a[bucket][k]));
   const rt = intro('runtime'), tl = intro('tooling');
   const sa = scripts(oldDir), sb = scripts(newDir);
   const newInstall = INSTALL_SCRIPTS.filter((k) => sb[k] && sb[k] !== sa[k]).map((k) => `${k} script: ${sb[k]}`);

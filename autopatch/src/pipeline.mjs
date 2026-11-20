@@ -71,7 +71,8 @@ export async function run({ cfg, adapter, mode = 'scan', approve = [], workDir, 
       f.gateAfterApply = gate.newFailures.map((c) => c.name);
       const preAi = `${next}.pre-ai`;
       if ((!f.fix || !gate.pass) && cfg.ai.enabled) {
-        copyTree(next, preAi, { skip: DIFF_IGNORE });
+        const ignore = [...DIFF_IGNORE, ...(adapter.diffIgnore || [])]; // e.g. WordPress: the SQLite DB the checks write to
+        copyTree(next, preAi, { skip: ignore });
         const checkCmd = writeCheckScript(ctx, next, f, known);
         const kind = f.fix ? 'repair' : 'hotfix';
         const prompt = kind === 'repair'
@@ -81,7 +82,7 @@ export async function run({ cfg, adapter, mode = 'scan', approve = [], workDir, 
         f.ai = { kind, ...runAgent({ cfg, cwd: next, prompt }) };
         log.info(`  AI ${kind}: $${f.ai.costUsd ?? '?'}, ${f.ai.turns ?? '?'} turns`);
         fs.rmSync(path.join(next, '.autopatch'), { recursive: true, force: true });
-        const changed = changedFiles(preAi, next, { ignore: DIFF_IGNORE });
+        const changed = changedFiles(preAi, next, { ignore });
         const forbidden = changed.filter((c) => !allowed(cfg, c.file));
         f.aiChanges = changed;
         f.aiDiff = unifiedDiff(preAi, next, changed.map((c) => c.file));
