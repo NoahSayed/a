@@ -7,12 +7,13 @@
     "start": "node server.js",
     "relay": "node relay.js",
     "test:relay": "node test/e2e.js relay-local && node test/security.js relay-local && node test/concurrency.js relay-local && node test/relay.js",
-    "test": "node test/e2e.js sqlite supabase-local slack-local relay-local && node test/security.js supabase-local relay-local && node test/slack.js && node test/concurrency.js sqlite supabase-local slack-local relay-local && node test/cli.js && node test/regressions-r1.js && node test/relay.js && node test/dlp.js && node test/proxy.js && node test/doctor.js && node test/regressions-r2-client.js && node test/managed.js && node test/regressions-r2-relay.js && node test/regressions-r3.js",
+    "test": "node test/e2e.js sqlite supabase-local slack-local relay-local && node test/security.js supabase-local relay-local && node test/slack.js && node test/concurrency.js sqlite supabase-local slack-local relay-local && node test/cli.js && node test/regressions-r1.js && node test/relay.js && node test/dlp.js && node test/proxy.js && node test/doctor.js && node test/regressions-r2-client.js && node test/managed.js && node test/regressions-r2-relay.js && node test/regressions-r3.js && node test/clients-codex.js",
     "test:sqlite": "node test/e2e.js sqlite && node test/concurrency.js sqlite",
     "test:e2e": "node test/e2e.js sqlite supabase-local slack-local",
     "test:security": "node test/security.js supabase-local",
     "test:concurrency": "node test/concurrency.js sqlite supabase-local slack-local",
     "test:cli": "node test/cli.js",
+    "test:codex": "node test/clients-codex.js",
     "test:regressions": "node test/regressions-r1.js",
     "test:hardening": "node test/dlp.js && node test/proxy.js && node test/doctor.js",
     "test:mutations": "node test/mutations.js",
@@ -21,6 +22,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "smol-toml": "1.6.1",
     "zod": "^4.6.7"
   },
   "type": "module",
