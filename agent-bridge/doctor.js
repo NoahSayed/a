@@ -36,6 +36,7 @@ import {
   proxyStatus,
   PROXY_VARS,
   PROXY_URL_VARS,
+  urlCredentialsProblem,
 } from "./proxy.js";
 
 const CLI = fileURLToPath(new URL("./cli.js", import.meta.url));
@@ -166,7 +167,10 @@ export function explainFailure(e, { what, env, proxy }) {
       fix: `A firewall is probably dropping the traffic. If your network requires a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1 (cli.js init does this from your shell).${proxyHint}`,
     };
   }
-  if (/\b(407)\b|proxy authentication/i.test(e.message)) {
+  if (/^EPROXY/.test(code) && code !== "EPROXY407") {
+    return { detail: `${what}: the proxy refused to open a tunnel (${code.replace("EPROXY", "HTTP ") || "no status"}).`, fix: `Check the proxy address in HTTPS_PROXY, and that the proxy allows CONNECT to the relay's host and port.` };
+  }
+  if (code === "EPROXY407" || /\b(407)\b|proxy authentication/i.test(e.message)) {
     return { detail: `${what}: the proxy wants credentials (HTTP 407).`, fix: `Put them in the proxy URL: HTTPS_PROXY=http://user:password@host:port (stored in plain text in the generated files).` };
   }
   return { detail: e.message, fix: proxyHint.trim() || undefined };
@@ -199,6 +203,40 @@ async function probeSupabase(env, proxy) {
     } else {
       const x = explainFailure(e, { what: "Supabase call failed", env, proxy });
       out.push(fail("Supabase call", x.detail, x.fix));
+    }
+  }
+  return out;
+}
+
+async function probeRelay(env, proxy) {
+  const { SupabaseStore } = await import("./stores/supabase.js");
+  const { tlsFetchFromEnv } = await import("./stores/tls-fetch.js");
+  const out = [];
+  let fetchImpl;
+  try {
+    fetchImpl = tlsFetchFromEnv(env); // the same TLS options and proxy handling as the server
+  } catch (e) {
+    return [fail("Relay TLS files", e.message, "Fix the path in the RELAY_TLS_* variable named above.")];
+  }
+  const store = new SupabaseStore({ url: env.RELAY_URL, key: "relay", token: readToken(env), label: "relay", ...(fetchImpl ? { fetchImpl } : {}) });
+  try {
+    const me = await store.whoami(); // bridge_whoami: proves reachability, TLS and the token at once
+    out.push(ok("Relay reachable and token accepted", `bridge_whoami → agent "${me.agent}", ${me.unread} unread`));
+    const named = (env.AGENT_NAME || "").trim();
+    if (named && named !== me.agent) {
+      out.push(fail("AGENT_NAME", `AGENT_NAME is "${named}" but the token belongs to "${me.agent}"`, "Remove AGENT_NAME or use the right token."));
+    }
+  } catch (e) {
+    if (e instanceof NetworkError) {
+      const x = explainFailure(e, { what: `Can't reach ${store.url}`, env, proxy });
+      out.push(fail("Relay reachability", x.detail, x.fix));
+    } else if (/not found\. Is RELAY_URL/i.test(e.message)) {
+      out.push(fail("Relay version", e.message, "Check RELAY_URL, and that the relay and this client are the same version."));
+    } else if (/token|unauthor|revoked|agent/i.test(e.message)) {
+      out.push(fail("Relay agent token", e.message, "Ask the admin for a new token (cli.js rotate-token <name>) and save it with cli.js save-token <name>."));
+    } else {
+      const x = explainFailure(e, { what: "Relay call failed", env, proxy });
+      out.push(fail("Relay call", x.detail, x.fix));
     }
   }
   return out;
@@ -274,6 +312,7 @@ export async function probeBackend(env = process.env) {
   const proxy = proxyStatus({ env });
   if (backend === "supabase") return probeSupabase(env, proxy);
   if (backend === "slack") return probeSlack(env, proxy);
+  if (backend === "relay") return probeRelay(env, proxy);
   return [];
 }
 
@@ -375,6 +414,41 @@ async function sqliteWriteTest(env, { dbFromRepo = false, source = null } = {}) 
   }
 }
 
+// RELAY_TLS_CA / RELAY_TLS_CLIENT_CERT / RELAY_TLS_CLIENT_KEY: readable PEM files (a leading ~ is this user's home), the
+// client certificate and its key together, and a key file only its owner can read.
+const PEM_RE = { CA: /-----BEGIN CERTIFICATE-----/, CERT: /-----BEGIN CERTIFICATE-----/, KEY: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ };
+function checkRelayTls(env) {
+  const out = [];
+  const set = (n) => Boolean(env[n] && env[n].trim());
+  for (const [name, kind, what] of [
+    ["RELAY_TLS_CA", "CA", "CA certificate (the CA that signed the relay's certificate)"],
+    ["RELAY_TLS_CLIENT_CERT", "CERT", "client certificate"],
+    ["RELAY_TLS_CLIENT_KEY", "KEY", "client private key"],
+  ]) {
+    if (!set(name)) continue;
+    const path = expandHome(env[name].trim());
+    let text;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch (e) {
+      out.push(fail(name, `${path}: ${e.code === "ENOENT" ? "file not found" : e.code || e.message}`, `Fix the path (a leading ~ is your home directory), or unset ${name}.`));
+      continue;
+    }
+    if (!PEM_RE[kind].test(text)) {
+      out.push(fail(name, `${path} contains no PEM ${what}`, `Point ${name} at a PEM file (-----BEGIN ${kind === "KEY" ? "PRIVATE KEY" : "CERTIFICATE"}-----).`));
+      continue;
+    }
+    if (kind === "KEY") out.push(...checkSecretFile(name, path));
+    else out.push(ok(name, `${path} (${what})`));
+  }
+  if (set("RELAY_TLS_CLIENT_CERT") && !set("RELAY_TLS_CLIENT_KEY")) {
+    out.push(fail("RELAY_TLS_CLIENT_KEY", "not set, but RELAY_TLS_CLIENT_CERT is: the client certificate needs its key", "Set RELAY_TLS_CLIENT_CERT and RELAY_TLS_CLIENT_KEY together."));
+  } else if (set("RELAY_TLS_CLIENT_KEY") && !set("RELAY_TLS_CLIENT_CERT")) {
+    out.push(fail("RELAY_TLS_CLIENT_CERT", "not set, but RELAY_TLS_CLIENT_KEY is: the key needs its certificate", "Set RELAY_TLS_CLIENT_CERT and RELAY_TLS_CLIENT_KEY together."));
+  }
+  return out;
+}
+
 // Returns the checks; `.blocked` is true when the configuration is too incomplete to try the network.
 function checkConfig(env, backend) {
   const out = [];
@@ -384,11 +458,13 @@ function checkConfig(env, backend) {
       out.push(fail("SUPABASE_URL", "not set", "export SUPABASE_URL=https://<project-ref>.supabase.co"));
       out.blocked = true;
     } else {
+      const cred = urlCredentialsProblem(env.SUPABASE_URL, "SUPABASE_URL");
       try {
+        if (cred) throw new BridgeError(cred);
         assertSecureUrl(env.SUPABASE_URL, "SUPABASE_URL");
         out.push(ok("SUPABASE_URL", env.SUPABASE_URL));
       } catch (e) {
-        out.push(fail("SUPABASE_URL", e.message, "Use the project's https:// URL."));
+        out.push(fail("SUPABASE_URL", e.message, cred ? "Use the project's https:// URL without a user name or password." : "Use the project's https:// URL."));
         out.blocked = true;
       }
     }
@@ -405,6 +481,27 @@ function checkConfig(env, backend) {
     const t = tokenFromEnv(env, "AGENT_BRIDGE_TOKEN", /^abt_[0-9a-f]{64}$/, "an agent-bridge token (abt_ + 64 hex)", "Agent");
     out.push(...t.out);
     if (!t.value) out.blocked = true;
+  } else if (backend === "relay") {
+    if (!env.RELAY_URL) {
+      out.push(fail("RELAY_URL", "not set", "export RELAY_URL=https://<relay-host>:8787 (the address of relay.js)."));
+      out.blocked = true;
+    } else {
+      const cred = urlCredentialsProblem(env.RELAY_URL, "RELAY_URL");
+      try {
+        if (cred) throw new BridgeError(cred);
+        assertSecureUrl(env.RELAY_URL, "RELAY_URL");
+        out.push(ok("RELAY_URL", env.RELAY_URL));
+      } catch (e) {
+        out.push(fail("RELAY_URL", e.message, cred ? "Use the relay's https:// URL without a user name or password." : "Use the relay's https:// URL (plain http only for a loopback address)."));
+        out.blocked = true;
+      }
+    }
+    const t = tokenFromEnv(env, "AGENT_BRIDGE_TOKEN", /^abt_[0-9a-f]{64}$/, "an agent-bridge token (abt_ + 64 hex)", "Agent");
+    out.push(...t.out);
+    if (!t.value) out.blocked = true;
+    const tlsChecks = checkRelayTls(env);
+    out.push(...tlsChecks);
+    if (tlsChecks.some((c) => c.level === "fail")) out.blocked = true;
   } else if (backend === "slack") {
     const ch = env.SLACK_CHANNEL_ID;
     if (!ch) {
@@ -414,7 +511,9 @@ function checkConfig(env, backend) {
     else if (!/^[CG][A-Z0-9]{6,}$/.test(ch)) out.push(warn("SLACK_CHANNEL_ID", `${ch} doesn't look like a channel id`, "Use the id (C0... or G0...), not the channel name."));
     else out.push(ok("SLACK_CHANNEL_ID", ch));
     if (env.SLACK_API_URL) {
+      const cred = urlCredentialsProblem(env.SLACK_API_URL, "SLACK_API_URL");
       try {
+        if (cred) throw new BridgeError(cred);
         assertSecureUrl(env.SLACK_API_URL, "SLACK_API_URL");
         out.push(ok("SLACK_API_URL", env.SLACK_API_URL));
       } catch (e) {
@@ -481,7 +580,7 @@ export async function diagnose(env, { execArgv = process.execArgv, probe = runPr
   try {
     backend = backendFromEnv(env);
     const forced = (env.AGENT_BRIDGE_BACKEND || "").trim();
-    const why = forced ? "AGENT_BRIDGE_BACKEND" : env.SUPABASE_URL ? "SUPABASE_URL is set" : env.SLACK_CHANNEL_ID ? "SLACK_CHANNEL_ID is set" : "default";
+    const why = forced ? "AGENT_BRIDGE_BACKEND" : env.SUPABASE_URL ? "SUPABASE_URL is set" : env.RELAY_URL ? "RELAY_URL is set" : env.SLACK_CHANNEL_ID ? "SLACK_CHANNEL_ID is set" : "default";
     checks.push(ok("Backend", `${backend} (${why})`));
   } catch (e) {
     checks.push(fail("Backend", e.message, `Set AGENT_BRIDGE_BACKEND to one of ${BACKENDS.join(", ")}, or unset it.`));

@@ -11,7 +11,7 @@
 
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import { AGENT_NAME_RE, BridgeError } from "./stores/common.js";
 
 export { BridgeError, NetworkError, MESSAGE_TYPES, LIMITS, AGENT_NAME_RE, isUuid } from "./stores/common.js";
@@ -100,17 +100,22 @@ const intEnv = (v) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Num
 // The project folder is AGENT_BRIDGE_PROJECT_DIR, else CLAUDE_PROJECT_DIR, else the working directory. An inherited
 // CURSOR_PROJECT_DIR is deliberately not used (R4-11): any process started from a Cursor terminal has it. peek,
 // when it runs as a Cursor hook, passes Cursor's workspace folder as AGENT_BRIDGE_PROJECT_DIR instead.
+//
+// The name is the folder's name, not a clean-up of it (R3-06). A name that picks a token file must not be the
+// same for folders that merely look alike (".Billing!", "billing.", "billing" + a zero-width space, two names
+// sharing their first 40 characters), so the folder name must already be a valid agent name; the only change
+// is that ASCII capitals are lower-cased (never Unicode case folding: U+212A KELVIN SIGN would become "k").
+// Anything else is refused, with the folder named. A folder that differs from another only in ASCII case
+// ("Billing" / "billing") still maps to the same agent: that is documented, not hidden.
 export function agentNameFromDir(dir) {
   const base = basename(resolve(dir || "."));
-  const name = base
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+/, "")
-    .slice(0, 40)
-    .replace(/-+$/, "");
+  const name = base.replace(/[A-Z]/g, (c) => c.toLowerCase());
   if (!AGENT_NAME_RE.test(name)) {
-    throw new BridgeError(`Can't make an agent name from the folder "${base}". Set AGENT_NAME for this project.`);
+    throw new BridgeError(
+      `The project folder ${JSON.stringify(base)} can't be used as an agent name as it is: with AGENT_BRIDGE_NAME_FROM=project the folder name ` +
+        `must be lowercase letters, digits, - and _ only (capitals are lower-cased), start with a letter or digit and have at most 40 characters. ` +
+        `Rename the folder, or give this project its own agent name with "cli.js init".`
+    );
   }
   return name;
 }
@@ -121,8 +126,23 @@ export function resolveIdentityEnv(env = process.env, cwd = process.cwd()) {
   const out = { ...env };
   const from = (env.AGENT_BRIDGE_NAME_FROM || "").trim().toLowerCase();
   if (from && from !== "project") throw new BridgeError(`AGENT_BRIDGE_NAME_FROM must be "project", got "${from}".`);
-  if (!(out.AGENT_NAME || "").trim() && from === "project") {
-    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);
+  if (from === "project") {
+    // Both project-folder variables must be absolute: a relative one would be taken against the working directory.
+    for (const k of ["AGENT_BRIDGE_PROJECT_DIR", "CLAUDE_PROJECT_DIR"]) {
+      if (env[k] && !isAbsolute(env[k])) throw new BridgeError(`${k} must be an absolute path, got ${JSON.stringify(env[k])}.`);
+    }
+    const derived = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);
+    // An AGENT_NAME that is not the folder's name is refused rather than obeyed: in a managed install it can only
+    // have been inherited (from the shell, or from a project's own settings), and it would pick another agent's
+    // token file (R3-06). A project that needs a different name uses its own "cli.js init" entry.
+    const given = (out.AGENT_NAME || "").trim();
+    if (given && given !== derived) {
+      throw new BridgeError(
+        `AGENT_NAME is "${given}" but AGENT_BRIDGE_NAME_FROM=project names this agent "${derived}" after its project folder; refusing to guess. ` +
+          `Unset AGENT_NAME (a managed entry takes the name from the folder).`
+      );
+    }
+    out.AGENT_NAME = derived;
   }
   for (const k of AGENT_PLACEHOLDER_VARS) {
     if (!out[k] || !out[k].includes("{agent}")) continue;
@@ -156,7 +176,7 @@ export async function createStore({ env: rawEnv = process.env, agentName, busyTi
     try {
       fetchImpl = tlsFetchFromEnv(env); // only with RELAY_TLS_CA / RELAY_TLS_CLIENT_CERT / RELAY_TLS_CLIENT_KEY
     } catch (e) {
-      throw new BridgeError(`Can't read a relay TLS file: ${e.code || e.message}`);
+      throw e instanceof BridgeError ? e : new BridgeError(`Can't read a relay TLS file: ${e.code || e.message}`); // names the variable and file
     }
     return new SupabaseStore({ url: env.RELAY_URL, key: "relay", token: readToken(env), label: "relay", ...(fetchImpl ? { fetchImpl } : {}) });
   }

@@ -5,6 +5,7 @@
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PROXY_URL_VARS, proxyUrlHasCredentials } from "../proxy.js";
 
 export const HERE = fileURLToPath(new URL("..", import.meta.url));
 export const SERVER_JS = join(HERE, "server.js");
@@ -134,7 +135,14 @@ export class FileTx {
 // The peek hook as { command, args } (exec form: no shell, values as --set arguments) or
 // { command } (shell form: one POSIX command line, values single-quoted). `extra` are extra peek
 // arguments such as ["--format", "codex"].
+//
+// A proxy URL that carries credentials (user:password@, or a token as the user name) is left out of the hook
+// (R3-05): the command line of a process is visible to every user of the machine (/proc/<pid>/cmdline, Task
+// Manager, ps), and the hook runs on every prompt. The hook then uses the HTTPS_PROXY it inherits from the
+// environment of the tool that starts it; NODE_USE_ENV_PROXY and the other settings still travel.
+export const hookCarriesProxyCredential = ([k, v]) => PROXY_URL_VARS.includes(k) && proxyUrlHasCredentials(v);
 export function peekHook({ form, name, env, extra = [], nodePath = process.execPath }) {
+  env = Object.fromEntries(Object.entries(env).filter((e) => !hookCarriesProxyCredential(e)));
   if (form === "exec") {
     const sets = Object.entries(env)
       .filter(([k]) => PEEK_ENV_KEYS.has(k) || PEEK_PROCESS_KEYS.has(k))
