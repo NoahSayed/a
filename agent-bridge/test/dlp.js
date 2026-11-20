@@ -50,11 +50,12 @@ await test("every secret kind is detected, and named correctly", async () => {
   assert.deepEqual(kinds("AS" + "IA" + "IOSFODNN7EXAMPLE"), ["aws-access-key"]);
 });
 
-await test("a truncated private key header alone is still caught", async () => {
+await test("a truncated private key (header + the start of the body) is still caught; a bare header is prose (R3-15)", async () => {
   need();
   assert.deepEqual(kinds("-----BEGIN OPENSSH " + "PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA"), ["private-key"]);
-  assert.deepEqual(kinds("-----BEGIN " + "PRIVATE KEY-----"), ["private-key"]);
-  assert.deepEqual(kinds("-----BEGIN PGP " + "PRIVATE KEY BLOCK-----"), ["private-key"]);
+  assert.deepEqual(kinds("-----BEGIN PGP " + "PRIVATE KEY BLOCK-----\nlQdGBF3xK2sBEADx9ZqW0a1b2"), ["private-key"]);
+  // changed by R3-15: the header on its own, in a sentence, is not a key
+  assert.deepEqual(kinds("-----BEGIN " + "PRIVATE KEY-----"), []);
   assert.deepEqual(kinds("-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkq\n-----END PUBLIC KEY-----"), [], "public keys are fine");
   assert.deepEqual(kinds("-----BEGIN CERTIFICATE-----\nMIIDdzCCAl+gAwIBAgIE\n-----END CERTIFICATE-----"), []);
 });
