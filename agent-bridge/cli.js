@@ -3,12 +3,18 @@
 // Run with no arguments for help.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dlpNotice } from "./stores/dlp.js";
 import { CA_VAR, maskProxyUrl, nodeSupportsEnvProxy, proxyEnvForConfig, proxyUrlHasCredentials } from "./proxy.js";
 import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, readSecret, resolveDbPath } from "./store.js";
+import { CLIENTS, PEEK_ENV_KEYS, PEEK_PROCESS_KEYS, PEEK_REEXEC_GUARD } from "./clients/common.js";
+import * as claudeClient from "./clients/claude.js";
+import * as cursorClient from "./clients/cursor.js";
+import * as codexClient from "./clients/codex.js";
+
+const CLIENT_MODULES = { claude: claudeClient, cursor: cursorClient, codex: codexClient };
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const HELP = `agent-bridge CLI
@@ -59,42 +65,25 @@ const flagValue = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form", "--from", "--to", "--node", "--server"]);
+const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form", "--from", "--to", "--node", "--server", "--client", "--format", "--event"]);
 const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 const [cmd, ...args] = positional;
 
 // Let stdout/stderr drain before process.exit(), which can cut off piped output on some platforms.
 const flush = () => new Promise((r) => process.stdout.write("", () => process.stderr.write("", r)));
 
-// The only variables an exec-form hook may pass to peek (--set KEY=VALUE).
-const PEEK_ENV_KEYS = new Set([
-  "AGENT_NAME", "AGENT_BRIDGE_BACKEND", "AGENT_BRIDGE_DB", "AGENT_BRIDGE_TOKEN_FILE", "AGENT_BRIDGE_LOOKBACK_HOURS",
-  "SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY", "SLACK_CHANNEL_ID", "SLACK_BOT_TOKEN_FILE",
-  "SLACK_API_URL", "RELAY_URL", "RELAY_TLS_CA", "RELAY_TLS_CLIENT_CERT", "RELAY_TLS_CLIENT_KEY",
-]);
-
-// Proxy and CA settings an exec-form hook may also pass (R2-12). Node reads these once, at process
-// start (NODE_USE_ENV_PROXY and NODE_EXTRA_CA_CERTS cannot be switched on from inside a running
-// process, and http.setGlobalProxyFromEnv only exists from Node 24.14), so peek re-runs itself once with
-// them in the child's environment. Never NODE_OPTIONS, never the re-exec guard.
-const PEEK_PROCESS_KEYS = new Set([
-  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",
-  "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy",
-]);
-const PEEK_REEXEC_GUARD = "AGENT_BRIDGE_PEEK_REEXEC";
-
-// POSIX single-quoting: nothing inside is expanded by the shell that runs the hook (R1-06).
-const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
-
-// init writes into the user's repo; never through a symlink that points somewhere else (R1-14).
-function refuseSymlink(p) {
-  try {
-    if (lstatSync(p).isSymbolicLink()) {
-      throw new Error(`${p} is a symlink; refusing to write through it. Replace it with a regular file or directory.`);
-    }
-  } catch (e) {
-    if (e.code !== "ENOENT") throw e;
+// --client claude|cursor|codex|all, repeatable or comma-separated. Default: claude.
+function clientsFromFlags() {
+  const vals = argv.flatMap((a, i) => (a === "--client" && i + 1 < argv.length ? argv[i + 1].split(",") : []));
+  if (argv.includes("--client") && !vals.length) throw new Error("--client needs a value: claude, cursor, codex or all");
+  const out = new Set();
+  for (const v of vals.length ? vals : ["claude"]) {
+    const c = v.trim().toLowerCase();
+    if (c === "all") CLIENTS.forEach((x) => out.add(x));
+    else if (CLIENTS.includes(c)) out.add(c);
+    else throw new Error(`--client: unknown client "${v}" (use claude, cursor, codex or all)`);
   }
+  return [...out];
 }
 
 const slackTokenPath = (name) => expandHome(`~/.agent-bridge/tokens/${name}.slack-token`);
@@ -180,6 +169,14 @@ async function main() {
     case "peek": {
       // Used as a Claude Code UserPromptSubmit hook: stdout is added to the agent's context.
       // Never fails loudly: a broken bridge must not block the user's prompt.
+      // --format claude|cursor|codex picks what the client's hook runner expects (plain text or JSON);
+      // --event names the hook event for clients whose output differs per event (Cursor).
+      const format = flagValue("--format") || "claude";
+      const notes = [];
+      const emit = () => {
+        const mod = CLIENT_MODULES[format];
+        if (mod) process.stdout.write(mod.peekOutput(notes, { event: flagValue("--event") }));
+      };
       try {
         // --set KEY=VALUE (exec-form hooks): the values init wrote into the local, uncommitted
         // .claude/settings.local.json. There is no shell in exec form, so nothing is expanded. Only
@@ -211,7 +208,7 @@ async function main() {
           process.exit(0);
         }
         const agent = args[0] || env.AGENT_NAME;
-        if (backendFromEnv(env) === "sqlite" && !agent) return;
+        if (backendFromEnv(env) === "sqlite" && !agent) return emit();
         // Short busy timeout: on SQLite the read is synchronous, so the race below can't cut it short (R1-08).
         const store = await createStore({ env, agentName: agent, busyTimeoutMs: 1500 });
         const summary = await Promise.race([
@@ -220,14 +217,15 @@ async function main() {
         ]);
         if (summary.length) {
           const who = summary.map((s) => `${s.n} from ${s.from_agent}`).join(", ");
-          console.log(`[agent-bridge] You have unread bridge messages (${who}). Call check_inbox when relevant.`);
+          notes.push(`[agent-bridge] You have unread bridge messages (${who}). Call check_inbox when relevant.`);
         }
         // Slack: an incomplete scan means "no unread mail" can't be trusted (R2-07).
-        for (const w of store.scanWarnings?.() ?? []) console.log(`[agent-bridge] WARNING: ${w}`);
+        for (const w of store.scanWarnings?.() ?? []) notes.push(`[agent-bridge] WARNING: ${w}`);
       } catch (e) {
         // stay silent so a broken bridge never blocks the prompt; AGENT_BRIDGE_DEBUG=1 shows why
         if (process.env.AGENT_BRIDGE_DEBUG) console.error(`agent-bridge peek: ${e.message}`);
       }
+      emit();
       await flush();
       process.exit(0);
     }
@@ -242,7 +240,6 @@ async function main() {
       const slack = flags.has("--slack");
       const relay = flags.has("--relay");
       if (supabase + slack + relay > 1) throw new Error("choose one of --supabase, --relay or --slack");
-      const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {});
 
       let env;
       if (slack) {
@@ -320,65 +317,23 @@ async function main() {
         }
       }
 
-      const mcpPath = join(repoDir, ".mcp.json");
-      refuseSymlink(mcpPath);
-      if (flags.has("--hook")) {
-        refuseSymlink(join(repoDir, ".claude"));
-        refuseSymlink(join(repoDir, ".claude", "settings.local.json"));
-      }
-      const mcp = readJson(mcpPath);
-      mcp.mcpServers ??= {};
-      const prevDesc = mcp.mcpServers.bridge?.env?.AGENT_DESCRIPTION;
+      // Which coding tools to wire: --client claude|cursor|codex|all (repeatable or comma-separated); default claude.
+      const clients = clientsFromFlags();
+      const summary = slack ? "slack " + env.SLACK_CHANNEL_ID : relay ? "relay " + env.RELAY_URL : supabase ? "supabase" : "local " + env.AGENT_BRIDGE_DB;
+      const notes = proxyNotes.length
+        ? [`proxy/TLS settings from your shell were written to the server's env (and the hook):\n${proxyNotes.join("\n")}`]
+        : [];
+      // Keep a description an earlier init stored (in any client's file) when none is given now.
       if (descParts.length) env.AGENT_DESCRIPTION = descParts.join(" ");
-      else if (prevDesc) env.AGENT_DESCRIPTION = prevDesc;
-      mcp.mcpServers.bridge = { command: process.execPath, args: [join(HERE, "server.js")], env };
-      writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + "\n");
-      console.log(`wrote ${mcpPath}  (agent "${name}", ${slack ? "slack " + env.SLACK_CHANNEL_ID : relay ? "relay " + env.RELAY_URL : supabase ? "supabase" : "local " + env.AGENT_BRIDGE_DB})`);
-
-      if (proxyNotes.length) {
-        console.log(`proxy/TLS settings from your shell were written to the server's env (and the hook):\n${proxyNotes.join("\n")}`);
-      }
-
-      if (flags.has("--hook")) {
-        const settingsPath = join(repoDir, ".claude", "settings.local.json");
-        mkdirSync(join(repoDir, ".claude"), { recursive: true });
-        const settings = readJson(settingsPath);
-        settings.hooks ??= {};
-        settings.hooks.UserPromptSubmit ??= [];
-        let hook;
-        if (hookForm === "exec") {
-          // No shell at all (Claude Code "exec form": command + args), so it behaves the same under Git Bash,
-          // PowerShell and sh. The values travel as arguments in this local settings file (peek --set).
-          const sets = Object.entries(env)
-            .filter(([k]) => PEEK_ENV_KEYS.has(k) || PEEK_PROCESS_KEYS.has(k))
-            .flatMap(([k, v]) => ["--set", `${k}=${v}`]);
-          hook = { type: "command", command: process.execPath, args: [join(HERE, "cli.js"), "peek", name, ...sets], timeout: 10 };
-        } else {
-          const envPrefix = Object.entries(env)
-            .filter(([k]) => k !== "AGENT_DESCRIPTION")
-            .map(([k, v]) => `${k}=${shq(v)}`)
-            .join(" ");
-          hook = { type: "command", command: `${envPrefix} ${shq(process.execPath)} ${shq(join(HERE, "cli.js"))} peek ${shq(name)}`, timeout: 10 };
+      else {
+        for (const c of CLIENTS) {
+          const prev = CLIENT_MODULES[c].readServerEnv(repoDir)?.env?.AGENT_DESCRIPTION;
+          if (prev) { env.AGENT_DESCRIPTION = prev; break; }
         }
-        // Drop any earlier agent-bridge hook for this agent (either form, quoted or not) so re-running init doesn't stack them.
-        const ours = new RegExp(`cli\\.js["']?\\s+peek\\s+["']?${name}["']?(\\s|$)`);
-        const text = (x) => [x.command, ...(Array.isArray(x.args) ? x.args : [])].map(String).join(" ");
-        // Only our own entries go: a matcher group can hold other hooks (R2-06), which stay where they are.
-        // A group is dropped only if removing ours leaves it empty.
-        settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.flatMap((h) => {
-          if (!Array.isArray(h?.hooks)) return [h];
-          const kept = h.hooks.filter((x) => !ours.test(text(x)));
-          if (kept.length === h.hooks.length) return [h];
-          return kept.length ? [{ ...h, hooks: kept }] : [];
-        });
-        settings.hooks.UserPromptSubmit.push({ hooks: [hook] });
-        writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-        console.log(`wrote ${settingsPath}  (unread-mail hook)`);
       }
-      console.log(
-        "next: restart Claude Code in that repo and approve the 'bridge' MCP server.\n" +
-          "tip: .mcp.json now holds absolute paths for this machine; add it to .gitignore if you don't want to commit it."
-      );
+      for (const c of clients) {
+        CLIENT_MODULES[c].writeConfig({ repoDir, name, env: { ...env }, withHook: flags.has("--hook"), hookForm, summary, notes });
+      }
       break;
     }
 

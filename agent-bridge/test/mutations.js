@@ -193,14 +193,14 @@ const MUTATIONS = [
   { name: "R1-13 bad thread_id waited out", file: "server.js",
     find: `    if (thread_id != null && !validThread) return fail(\`Unknown thread_id \${thread_id}.\`); // R1-13`, replace: ``,
     suite: R1, also: { find: `        if (!(e instanceof NetworkError)) throw e;`, replace: `` } },
-  { name: "R1-14 init writes through symlinks", file: "cli.js",
+  { name: "R1-14 init writes through symlinks", file: "clients/common.js",
     find: `    if (lstatSync(p).isSymbolicLink()) {`, replace: `    if (false) {`, suite: R1 },
-  { name: "R1-06 hook values double-quoted", file: "cli.js",
+  { name: "R1-06 hook values double-quoted", file: "clients/common.js",
     find: "const shq = (v) => `'${String(v).replace(/'/g, `'\\\\''`)}'`;", replace: 'const shq = (v) => `"${v}"`;', suite: R1 },
   { name: "portability: ~name expands to the home directory", file: "store.js",
     find: "const HOME_PREFIX = process.platform === \"win32\" ? /^~[\\\\/]/ : /^~\\//;", replace: "const HOME_PREFIX = /^~/;", suite: ["test/cli.js"] },
-  { name: "portability: exec-form hook carries no settings", file: "cli.js",
-    find: "            .flatMap(([k, v]) => [\"--set\", `${k}=${v}`]);", replace: "            .flatMap(() => []);", suite: ["test/cli.js"] },
+  { name: "portability: exec-form hook carries no settings", file: "clients/common.js",
+    find: "      .flatMap(([k, v]) => [\"--set\", `${k}=${v}`]);", replace: "      .flatMap(() => []);", suite: ["test/cli.js"] },
   { name: "peek --set accepts any variable", file: "cli.js",
     find: "            if (!PEEK_ENV_KEYS.has(k) && !PEEK_PROCESS_KEYS.has(k)) throw new Error(`peek --set: ${k || kv} is not a bridge setting`);", replace: "", suite: ["test/cli.js"] },
   { name: "exec-form hook reads the repo's .mcp.json", file: "cli.js",
@@ -436,7 +436,7 @@ const MUTATIONS = [
     find: `  if (env[SYSTEM_CA_VAR] && env[SYSTEM_CA_VAR].trim()) out[SYSTEM_CA_VAR] = env[SYSTEM_CA_VAR].trim();`, replace: ``, suite: PX },
   { name: "HD proxy init prints the proxy password", file: "cli.js",
     find: "${/^(https?)_proxy$/i.test(k) ? maskProxyUrl(v) : v}", replace: "${v}", suite: PX },
-  { name: "HD proxy hook command lacks the proxy environment", file: "cli.js",
+  { name: "HD proxy hook command lacks the proxy environment", file: "clients/common.js",
     find: `.filter(([k]) => k !== "AGENT_DESCRIPTION")`, replace: `.filter(([k]) => k !== "AGENT_DESCRIPTION" && !/proxy|CA_|SYSTEM/i.test(k))`, suite: PX },
   { name: "HD proxy init keeps a relative CA path", file: "cli.js",
     find: `make the CA path absolute.\n        if (px[CA_VAR]) px[CA_VAR] = resolve(expandHome(px[CA_VAR]));`,
@@ -490,13 +490,13 @@ const MUTATIONS = [
     find: `      if (/-----BEGIN CERTIFICATE-----/.test(pem))`, replace: `      if (true)`, suite: DOC },
 
   // ---- round 2, client side (test/regressions-r2-client.js) ----
-  { name: "R2-06 de-dup drops the whole matcher group", file: "cli.js",
-    find: `          const kept = h.hooks.filter((x) => !ours.test(text(x)));
-          if (kept.length === h.hooks.length) return [h];
-          return kept.length ? [{ ...h, hooks: kept }] : [];`,
-    replace: `          if (!h.hooks.some((x) => ours.test(text(x)))) return [h];
-          return [];`, suite: R2C },
-  { name: "R2-06 de-dup loses the group's matcher", file: "cli.js",
+  { name: "R2-06 de-dup drops the whole matcher group", file: "clients/claude.js",
+    find: `      const kept = h.hooks.filter((x) => !ours.test(hookText(x)));
+      if (kept.length === h.hooks.length) return [h];
+      return kept.length ? [{ ...h, hooks: kept }] : [];`,
+    replace: `      if (!h.hooks.some((x) => ours.test(hookText(x)))) return [h];
+      return [];`, suite: R2C },
+  { name: "R2-06 de-dup loses the group's matcher", file: "clients/claude.js",
     find: `[{ ...h, hooks: kept }]`, replace: `[{ hooks: kept }]`, suite: R2C },
   { name: "R2-07 scan page cap back to 20", file: SLACK,
     find: `const DEFAULT_MAX_PAGES = 500;`, replace: `const DEFAULT_MAX_PAGES = 20;`, suite: R2C },
@@ -510,7 +510,7 @@ const MUTATIONS = [
   { name: "R2-07 whoami drops the scan warnings", file: SLACK,
     find: `unread, ...(warnings.length ? { warnings } : {}) };`, replace: `unread };`, suite: R2C },
   { name: "R2-07 the unread-mail hook hides scan warnings", file: "cli.js",
-    find: `for (const w of store.scanWarnings?.() ?? []) console.log(`, replace: `for (const w of []) console.log(`, suite: R2C },
+    find: `for (const w of store.scanWarnings?.() ?? []) notes.push(`, replace: `for (const w of []) notes.push(`, suite: R2C },
   { name: "R2-07 no per-sender rate limit on Slack", file: SLACK,
     find: `if (window.length >= this.ratePerMinute) {`, replace: `if (false) {`, suite: R2C },
   { name: "R2-07 no per-sender unread backlog limit on Slack", file: SLACK,
@@ -544,13 +544,13 @@ const MUTATIONS = [
     also: { find: `token: readSlackToken(env),`, replace: `token: readSecret(env, "SLACK_BOT_TOKEN"),` } },
   { name: "R2-12 peek doesn't re-run itself with proxy and CA settings", file: "cli.js",
     find: `if (Object.keys(startup).length && process.env[PEEK_REEXEC_GUARD] !== "1") {`, replace: `if (false) {`, suite: R2C },
-  { name: "R2-12 the exec-form hook leaves out proxy and CA settings", file: "cli.js",
+  { name: "R2-12 the exec-form hook leaves out proxy and CA settings", file: "clients/common.js",
     find: `.filter(([k]) => PEEK_ENV_KEYS.has(k) || PEEK_PROCESS_KEYS.has(k))`, replace: `.filter(([k]) => PEEK_ENV_KEYS.has(k))`, suite: R2C },
-  { name: "R2-12 peek --set passes NODE_OPTIONS", file: "cli.js",
+  { name: "R2-12 peek --set passes NODE_OPTIONS", file: "clients/common.js",
     find: `  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, replace: `  "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, suite: R2C },
-  { name: "R2-12 peek --set passes the re-exec guard", file: "cli.js",
+  { name: "R2-12 peek --set passes the re-exec guard", file: "clients/common.js",
     find: `  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, replace: `  "AGENT_BRIDGE_PEEK_REEXEC", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, suite: R2C },
-  { name: "R2-12 peek --set passes AGENT_BRIDGE_TOKEN", file: "cli.js",
+  { name: "R2-12 peek --set passes AGENT_BRIDGE_TOKEN", file: "clients/common.js",
     find: `  "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, replace: `  "AGENT_BRIDGE_TOKEN", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA", "NODE_USE_ENV_PROXY",`, suite: R2C },
 
   // ---- managed installs (test/managed.js)
