@@ -742,8 +742,9 @@ const MUTATIONS = [
     find: "  return m && VALUE_FLAGS.has(m[1]) ? [m[1], m[2]] : [a];", replace: "  return [a];", suite: ["test/regressions-r4.js"] },
 ];
 
-// Client-specific mutations live next to their suites (test/mutations-<client>.js, default export: an array).
-for (const c of ["codex", "cursor"]) {
+// Mutations kept next to their suites (test/mutations-<part>.js, default export: an array): the coding-tool
+// clients, and the round-3 fixes (DLP, client config, relay).
+for (const c of ["codex", "cursor", "r3-dlp", "r3-config", "r3-relay"]) {
   const url = new URL(`./mutations-${c}.js`, import.meta.url);
   if (existsSync(fileURLToPath(url))) MUTATIONS.push(...(await import(url)).default);
 }
