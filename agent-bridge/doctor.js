@@ -447,7 +447,7 @@ function checkProxy(env, backend, execArgv) {
 // ------------------------------------------------------------------ entry point
 
 // Gathers every check. `env` is the effective environment of the server being diagnosed.
-export async function diagnose(env, { execArgv = process.execArgv, probe = runProbe } = {}) {
+export async function diagnose(env, { execArgv = process.execArgv, probe = runProbe, allowNetwork = true, source = null } = {}) {
   const checks = [];
   checks.push(
     nodeVersionOk()
@@ -483,7 +483,20 @@ export async function diagnose(env, { execArgv = process.execArgv, probe = runPr
   if (backend === "sqlite") {
     if (!checks.some((c) => c.level === "fail")) checks.push(...(await sqliteWriteTest(env)));
   } else if (!blocked) {
-    checks.push(...(await probe(env)));
+    const dest = probeDestination(env);
+    if (!allowNetwork && dest) {
+      // R3-04: with `doctor <repo>` the address comes from a file in the repo; don't hand it this agent's
+      // credentials unless the person running doctor says that host is right.
+      checks.push(
+        warn(
+          "Reachability",
+          `skipped: the check would send this agent's credentials to ${dest}, an address taken from ${source}`,
+          "If that host is right, re-run with --probe."
+        )
+      );
+    } else {
+      checks.push(...(await probe(env)));
+    }
   } else {
     checks.push(warn("Reachability", "skipped: fix the configuration problems above first"));
   }
@@ -516,6 +529,27 @@ export function render(checks, env, header) {
 }
 
 // Effective environment for `doctor <repo>`: the repo's .mcp.json `bridge` env over this shell's.
+// The only settings `doctor <repo>` takes from a repo's .mcp.json (R3-04). A committed file must
+// not be able to set NODE_OPTIONS, LD_PRELOAD and the like for the probe process.
+export const REPO_ENV_KEYS = new Set([
+  "AGENT_NAME", "AGENT_DESCRIPTION", "AGENT_BRIDGE_BACKEND", "AGENT_BRIDGE_DB", "AGENT_BRIDGE_TOKEN_FILE",
+  "AGENT_BRIDGE_NAME_FROM", "AGENT_BRIDGE_LOOKBACK_HOURS", "AGENT_BRIDGE_SLACK_MAX_PAGES", "AGENT_BRIDGE_DLP",
+  "AGENT_BRIDGE_MAX_HOPS", "AGENT_BRIDGE_RATE_PER_MIN", "AGENT_BRIDGE_MAX_UNREAD", "AGENT_BRIDGE_MAX_BYTES_PER_DAY",
+  "SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY", "SLACK_CHANNEL_ID", "SLACK_BOT_TOKEN_FILE",
+  "SLACK_API_URL", "RELAY_URL", "RELAY_TLS_CA", "RELAY_TLS_CLIENT_CERT", "RELAY_TLS_CLIENT_KEY",
+  "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy",
+  "NODE_USE_ENV_PROXY", "NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA",
+]);
+
+// Where a network check would send this agent's credentials, or null for the local backend.
+export function probeDestination(env) {
+  const backend = (env.AGENT_BRIDGE_BACKEND || "").trim() || (env.SUPABASE_URL ? "supabase" : env.RELAY_URL ? "relay" : env.SLACK_CHANNEL_ID ? "slack" : "sqlite");
+  if (backend === "supabase") return env.SUPABASE_URL || "(SUPABASE_URL not set)";
+  if (backend === "relay") return env.RELAY_URL || "(RELAY_URL not set)";
+  if (backend === "slack") return env.SLACK_API_URL || "https://slack.com/api";
+  return null;
+}
+
 export function envFromRepo(repoDir, base = process.env) {
   const p = join(resolve(repoDir), ".mcp.json");
   if (!existsSync(p)) throw new BridgeError(`no .mcp.json in ${resolve(repoDir)}; run "cli.js init" first.`);
@@ -527,5 +561,11 @@ export function envFromRepo(repoDir, base = process.env) {
   }
   const srv = cfg.mcpServers?.bridge;
   if (!srv) throw new BridgeError(`${p} has no "bridge" server; run "cli.js init" first.`);
-  return { env: { ...base, ...(srv.env || {}) }, path: p };
+  const taken = {};
+  const ignored = [];
+  for (const [k, v] of Object.entries(srv.env || {})) {
+    if (REPO_ENV_KEYS.has(k) && typeof v === "string") taken[k] = v;
+    else ignored.push(k);
+  }
+  return { env: { ...base, ...taken }, path: p, ignored };
 }

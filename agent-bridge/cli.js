@@ -36,7 +36,8 @@ Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
   limits [--rate N] [--max-unread N] [--max-mb-day N]
                                        show or change the per-agent abuse limits
   purge [days=30]                      delete messages older than N days
-  doctor [repo]                        diagnose the setup (this shell, or the repo's .mcp.json); exit 1 on FAIL
+  doctor [repo] [--probe]              diagnose the setup (this shell, or the repo's .mcp.json); exit 1 on FAIL.
+                                       With a repo, the network check needs --probe (it sends the agent's token)
   save-token <name>                    read a token from stdin into ~/.agent-bridge/tokens/<name>.token
 Relay admin: the same commands (add-agent ... purge) work against a self-hosted relay.js when
   RELAY_URL + RELAY_ADMIN_KEY (or RELAY_ADMIN_KEY_FILE) are set; "init <repo> <name> --relay" needs RELAY_URL.
@@ -577,13 +578,16 @@ async function main() {
       let env = process.env;
       let execArgv = process.execArgv;
       let where = "this shell's environment";
+      let fromRepo = false;
       if (args[0]) {
         const r = envFromRepo(args[0]);
         env = r.env;
         execArgv = []; // Claude Code starts the server, not this process
         where = r.path;
+        fromRepo = true;
+        if (r.ignored.length) console.log(`note: ignored settings in ${r.path} that aren't bridge settings: ${r.ignored.join(", ")}`);
       }
-      const checks = await diagnose(env, { execArgv });
+      const checks = await diagnose(env, { execArgv, allowNetwork: !fromRepo || flags.has("--probe"), source: where });
       console.log(render(checks, env, `agent-bridge doctor (${where})`));
       process.exitCode = checks.some((c) => c.level === "fail") ? 1 : 0;
       break;

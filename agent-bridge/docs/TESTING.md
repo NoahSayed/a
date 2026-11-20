@@ -35,6 +35,7 @@ npm run test:live             # your real Supabase project (needs keys, see belo
 | `test/regressions-r2-relay.js` | relay | One or more tests per relay finding of [adversary round 2](adversary/round-02-triage.md): strict booleans, empty or garbage TLS and key settings, key env+file conflicts, half-open/silent/dripping sockets reaped and the connection cap held, deep nesting and absurd intervals return 400, rate-limited auth-failure auditing, torn audit lines repaired and verified, fail-closed audit mode, zone-less export timestamps refused under two `TZ`s, ids in audit lines. **0/24 on the attacked code, 26/26 now** |
 | `test/regressions-r2-client.js` | sqlite, slack-local, cli | One or more tests per client finding of round 2: hook de-dup keeps the user's hooks, the Slack scan covers the whole window and says when it was cut short, reader-side sender limits, ambiguous people, token shape and file checks before any request, exec-form hooks through a TLS-inspecting proxy with a private CA. **1/20 on the attacked code, 20/20 now** |
 | `test/managed.js` | sqlite, supabase-local | `managed-config`: valid JSON, one fixed launch command, settings only in env, no secret even when the shell has them, proxy credentials refused, a relative CA path made absolute. A server started from that entry is named after its project folder (`CLAUDE_PROJECT_DIR` and `AGENT_NAME` take precedence), and `{agent}` token files work per project. **1/9 before the feature (the one pass was trivially true then), 9/9 now** |
+| `test/regressions-r3.js` | dlp, cli | Round 3's high findings: the DLP scan stays linear on 50,000-character adversarial bodies, and `doctor <repo>` takes no non-bridge variable from a repo and sends no token without `--probe`. **2/5 on the attacked code (the 2 are "still works" guards), 5/5 now** |
 | `test/mutations.js` | (runs the suites above) | Removes one guard at a time and checks that some suite fails; see [Mutation testing](#mutation-testing) |
 
 ## Platforms (CI)
@@ -67,8 +68,8 @@ Adapted from the dev-workflow rules in the reference repo:
 ## Mutation testing
 
 `node test/mutations.js` makes each change to the real source, runs the named suite, and restores the file.
-`node test/mutations.js "<part of a name>"` runs a subset. "Killed" means a test failed. There are **139 mutations**,
-all killed:
+`node test/mutations.js "<part of a name>"` runs a subset. "Killed" means a test failed. There are **218 mutations**,
+all killed on the final tree (a full run of 215, then the 3 round-3 mutations):
 
 | Group | Count | Where the results are recorded |
 |---|---|---|

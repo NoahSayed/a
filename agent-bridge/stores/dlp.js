@@ -157,9 +157,13 @@ function looksLikeSecret(v, quoted) {
   return digit || symbol; // bare words are usually identifiers
 }
 
+// Each value is read at most this far, so a body of repeated "token=" can't make the scan quadratic (R3-01).
+const MAX_ASSIGN_VALUE = 512;
+
 function* assignmentFindings(text) {
   for (const m of text.matchAll(ASSIGN_RE)) {
     let i = m.index + m[0].length;
+    const limit = Math.min(text.length, i + 1 + MAX_ASSIGN_VALUE);
     const q = text[i];
     let start;
     let end;
@@ -167,14 +171,16 @@ function* assignmentFindings(text) {
     if (q === '"' || q === "'") {
       start = i + 1;
       end = start;
-      while (end < text.length && text[end] !== q && text[end] !== "\n") end++;
-      if (text[end] !== q) continue; // unterminated
+      while (end < limit && text[end] !== q && text[end] !== "\n") end++;
+      // stopped by the length cap: judge the first MAX_ASSIGN_VALUE characters; a newline or the end
+      // of the text means the quote was never closed
+      if (text[end] !== q && end < limit) continue;
       value = text.slice(start, end);
       if (!looksLikeSecret(value, true)) continue;
     } else {
       start = i;
       end = start;
-      while (end < text.length && !/[\s,;"'`)}\]]/.test(text[end])) end++;
+      while (end < limit && !/[\s,;"'`)}\]]/.test(text[end])) end++;
       value = text.slice(start, end);
       // "X.MD5Password = AuthenticationMD5Password;": a code statement assigning another name
       if (text[end] === ";" || !looksLikeSecret(value, false)) continue;

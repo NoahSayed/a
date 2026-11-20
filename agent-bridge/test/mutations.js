@@ -228,9 +228,12 @@ const MUTATIONS = [
     find: "    const text = `${header}\\n${escape(body)}`;", replace: "    const text = `${header}\\n${body}`;", suite: SLT },
   { name: "SL bots can pose as people", file: SLACK,
     find: `    if (m.bot_id || m.subtype || !m.user) return null;`, replace: `    if (m.subtype || !m.user) return null;`, suite: SLT,
-    // two independent guards (bot_id on the message, is_bot on the user): remove both
+    // three independent guards since R2-08 (bot_id on the message, is_bot on the user, and a bot's
+    // name never being a known person's name): remove all three
     also: { find: `    if (!u || u.is_bot || !/^[a-z0-9][a-z0-9._-]{0,79}$/.test(u.name)) return null;`,
-            replace: `    if (!u || !/^[a-z0-9][a-z0-9._-]{0,79}$/.test(u.name)) return null;` } },
+            replace: `    if (!u || !/^[a-z0-9][a-z0-9._-]{0,79}$/.test(u.name)) return null;` },
+    also2: { find: `    if ((dir.humansByName.get(u.name) || []).length !== 1) return { ambiguousHuman: u.name };`,
+             replace: `    if (!u.is_bot && (dir.humansByName.get(u.name) || []).length !== 1) return { ambiguousHuman: u.name };` } },
   { name: "SL duplicate bot names trusted", file: SLACK,
     find: `    return (dir.botsByName.get(u.name) || []).length === 1 ? u.name : null;`, replace: `    return u.name;`, suite: SLT,
     also: { find: `    if ((dir.botsByName.get(this.me.name) || []).length > 1) {`, replace: `    if (false) {` } },
@@ -663,6 +666,16 @@ const MUTATIONS = [
     find: 'else audit.write({ action: "peek", agent: me, count: rows.length, ids: rows.map((m) => m.id) });', replace: 'else audit.write({ action: "peek", agent: me, count: rows.length });', suite: R2R },
   { name: "R2-14 thread audit has no message ids", file: "relay.js",
     find: 'count: rows.length, ids: rows.map((m) => m.id) });\n        return rows;\n      },\n    },\n    bridge_recent', replace: 'count: rows.length });\n        return rows;\n      },\n    },\n    bridge_recent', suite: R2R },
+  // ---- adversary round 3 (test/regressions-r3.js)
+  { name: "R3-01 assignment values read to the end of the text (quadratic)", file: "stores/dlp.js",
+    find: "    const limit = Math.min(text.length, i + 1 + MAX_ASSIGN_VALUE);", replace: "    const limit = text.length;",
+    suite: ["test/regressions-r3.js"] },
+  { name: "R3-04 doctor takes every variable from the repo", file: "doctor.js",
+    find: "    if (REPO_ENV_KEYS.has(k) && typeof v === \"string\") taken[k] = v;", replace: "    taken[k] = v;",
+    suite: ["test/regressions-r3.js"] },
+  { name: "R3-04 doctor probes a repo's backend without --probe", file: "cli.js",
+    find: "allowNetwork: !fromRepo || flags.has(\"--probe\")", replace: "allowNetwork: true",
+    suite: ["test/regressions-r3.js"] },
 ];
 
 // Optional: node test/mutations.js "<part of a name>" ... runs only matching mutations.
@@ -672,9 +685,9 @@ if (process.argv.includes("--check")) {
   let stale = 0;
   for (const m of MUTATIONS) {
     const text = readFileSync(ROOT + m.file, "utf8");
-    const missing = [m.find, m.also?.find].filter((f) => f != null && !text.includes(f));
+    const missing = [m.find, m.also?.find, m.also2?.find].filter((f) => f != null && !text.includes(f));
     // A target that occurs more than once may mutate the wrong place (the first match is replaced).
-    const ambiguous = [m.find, m.also?.find].filter((f) => f != null && text.split(f).length > 2);
+    const ambiguous = [m.find, m.also?.find, m.also2?.find].filter((f) => f != null && text.split(f).length > 2);
     if (missing.length) {
       stale++;
       console.log(`  STALE ${m.name} (${m.file})`);
@@ -706,6 +719,14 @@ for (const m of selected) {
       continue;
     }
     mutated = mutated.replace(m.also.find, m.also.replace);
+  }
+  if (m.also2) {
+    if (!mutated.includes(m.also2.find)) {
+      console.log(`  ??   ${m.name}: third mutation target not found in ${m.file}`);
+      survived++;
+      continue;
+    }
+    mutated = mutated.replace(m.also2.find, m.also2.replace);
   }
   writeFileSync(path, mutated);
   try {
