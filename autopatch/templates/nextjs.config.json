@@ -1,0 +1,28 @@
+{
+  "adapter": "nextjs",
+  "ownedPaths": ["app/**", "lib/**", "components/**", "middleware.js"],
+  "ai": { "enabled": true, "model": "haiku" },
+  "policy": { "cooldownDays": 3 },
+  "checks": {
+    "test": "npm test",
+    "restartCheck": true,
+    "pages": [
+      { "path": "/", "includes": ["<your home page text>"] },
+      { "path": "/login", "includes": ["Log in"] }
+    ],
+    "flows": [
+      { "name": "login valid", "method": "POST", "path": "/api/auth/login", "json": { "username": "<user>", "password": "<password>" }, "saveCookie": "user", "expect": { "status": 200 } },
+      { "name": "login invalid", "method": "POST", "path": "/api/auth/login", "json": { "username": "<user>", "password": "wrong" }, "expect": { "status": 401 } },
+      { "name": "protected page denied when anonymous", "path": "/admin", "expect": { "status": [302, 307, 401, 403], "notIncludes": ["<text only admins see>"] } },
+      { "name": "protected page works when logged in", "path": "/admin", "useCookie": "user", "expect": { "status": 200, "includes": ["<text only admins see>"] } },
+      { "name": "session issued before restart", "phase": "before-restart", "method": "POST", "path": "/api/auth/login", "json": { "username": "<user>", "password": "<password>" }, "saveCookie": "persisted", "expect": { "status": 200 } },
+      { "name": "session survives restart", "phase": "after-restart", "path": "/api/auth/verify", "useCookie": "persisted", "expect": { "status": 200 } }
+    ],
+    "probes": [
+      { "finding": "<advisory id or package name>", "script": "autopatch-probes/<name>.mjs" }
+    ]
+  },
+  "sensitive": { "extraPatterns": [] },
+  "feeds": { "local": [] },
+  "server": { "port": 3200, "readyPath": "/" }
+}
