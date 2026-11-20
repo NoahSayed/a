@@ -69,7 +69,7 @@ const flagValue = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form", "--from", "--to", "--node", "--server", "--client", "--format", "--event"]);
+const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form", "--from", "--to", "--node", "--server", "--client", "--format", "--event", "--cursor-events"]);
 const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 const [cmd, ...args] = positional;
 
@@ -175,11 +175,26 @@ async function main() {
       // Never fails loudly: a broken bridge must not block the user's prompt.
       // --format claude|cursor|codex picks what the client's hook runner expects (plain text or JSON);
       // --event names the hook event for clients whose output differs per event (Cursor).
-      const format = flagValue("--format") || "claude";
+      let format = flagValue("--format") || "claude";
+      let event = flagValue("--event");
       const notes = [];
+      // Cursor sends the hook's input as JSON on stdin. Read (bounded, never a terminal) when the format is Cursor's,
+      // or when no format was given but Cursor's environment is present: Cursor also runs the Claude hook from
+      // .claude/settings*.json, and answers to it must be JSON (see clients/cursor.js).
+      let hookInput = null;
+      let imported = false;
+      if (format === "cursor" || (!flagValue("--format") && cursorClient.looksLikeCursorEnv(process.env))) {
+        hookInput = await cursorClient.readHookInput();
+        const ev = format === "cursor" ? null : cursorClient.detectCursorInput(hookInput);
+        if (ev !== null) {
+          format = "cursor";
+          event = ev || undefined;
+          imported = true;
+        }
+      }
       const emit = () => {
         const mod = CLIENT_MODULES[format];
-        if (mod) process.stdout.write(mod.peekOutput(notes, { event: flagValue("--event") }));
+        if (mod) process.stdout.write(mod.peekOutput(notes, { event, input: hookInput }));
       };
       try {
         // --set KEY=VALUE (exec-form hooks): the values init wrote into the local, uncommitted
@@ -202,12 +217,24 @@ async function main() {
         }
         if (Object.keys(startup).length && process.env[PEEK_REEXEC_GUARD] !== "1") {
           // Run again, once, with the settings in the child's real environment (R2-12). The guard stops a loop.
-          spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...argv], {
+          // Cursor wants JSON on stdout whatever happens: the child's answer is passed on only if it is JSON.
+          const asCursor = format === "cursor";
+          const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...argv, ...(imported ? ["--format", "cursor", ...(event ? ["--event", event] : [])] : [])], {
             env: { ...process.env, ...startup, [PEEK_REEXEC_GUARD]: "1" },
-            stdio: ["ignore", "inherit", "inherit"],
+            input: asCursor ? JSON.stringify(hookInput ?? {}) : undefined,
+            stdio: [asCursor ? "pipe" : "ignore", asCursor ? "pipe" : "inherit", "inherit"],
+            encoding: "utf8",
             timeout: 9000,
             windowsHide: true,
           });
+          if (asCursor) {
+            let ok = false;
+            try {
+              ok = typeof child.stdout === "string" && child.stdout.trim() !== "" && JSON.parse(child.stdout) !== null;
+            } catch {}
+            if (ok) process.stdout.write(child.stdout);
+            else emit();
+          }
           await flush();
           process.exit(0);
         }
@@ -225,6 +252,8 @@ async function main() {
         }
         // Slack: an incomplete scan means "no unread mail" can't be trusted (R2-07).
         for (const w of store.scanWarnings?.() ?? []) notes.push(`[agent-bridge] WARNING: ${w}`);
+        // A Claude hook that Cursor imported, in a repo that also has our native Cursor hook for this event: that hook reports.
+        if (imported && cursorClient.hasNativeHook(cursorClient.workspaceOf(hookInput), agent, event)) notes.length = 0;
       } catch (e) {
         // stay silent so a broken bridge never blocks the prompt; AGENT_BRIDGE_DEBUG=1 shows why
         if (process.env.AGENT_BRIDGE_DEBUG) console.error(`agent-bridge peek: ${e.message}`);
@@ -335,8 +364,10 @@ async function main() {
           if (prev) { env.AGENT_DESCRIPTION = prev; break; }
         }
       }
+      // --cursor-events is validated before any client's files are written
+      const cursorEvents = clients.includes("cursor") ? cursorClient.parseEvents(flagValue("--cursor-events")) : undefined;
       for (const c of clients) {
-        CLIENT_MODULES[c].writeConfig({ repoDir, name, env: { ...env }, withHook: flags.has("--hook"), hookForm, summary, notes });
+        CLIENT_MODULES[c].writeConfig({ repoDir, name, env: { ...env }, withHook: flags.has("--hook"), hookForm, summary, notes, cursorEvents });
         // The skill: plain instructions (when to message, how, safety rules), no paths or secrets, safe to commit.
         if (!flags.has("--no-skill")) {
           const p = installSkill(repoDir, c);
