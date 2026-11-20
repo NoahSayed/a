@@ -98,7 +98,8 @@ const intEnv = (v) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Num
 // One machine-wide managed-mcp.json entry can serve every project: with AGENT_BRIDGE_NAME_FROM=project
 // the agent's name is its project folder's name, and "{agent}" in a token-file path becomes that name.
 // The project folder is AGENT_BRIDGE_PROJECT_DIR, else CLAUDE_PROJECT_DIR, else CURSOR_PROJECT_DIR (set by Cursor's hooks),
-// else the working directory. In a Cursor mcp.json, "AGENT_BRIDGE_PROJECT_DIR": "${workspaceFolder}" does it.
+// else the working directory. (Cursor's mcp.json is reported to expand "${workspaceFolder}", which could set
+// AGENT_BRIDGE_PROJECT_DIR; not verified, see docs/clients/cursor.md.)
 export function agentNameFromDir(dir) {
   const base = basename(resolve(dir || "."));
   const name = base

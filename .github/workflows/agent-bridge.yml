@@ -87,6 +87,8 @@ jobs:
         run: node test/doctor.js
       - name: Managed installs (managed-mcp.json, agent name from the project folder)
         run: node test/managed.js
+      - name: Coding-tool clients (--client, skill, Codex, Cursor)
+        run: node test/clients.js && node test/clients-codex.js && node test/clients-cursor.js
 
   # macOS and Windows runners have no Postgres service containers, so only the suites that never touch
   # Postgres run here (SQLite and the Slack stand-in, plus the CLI/regression parts that need no database).
@@ -135,3 +137,5 @@ jobs:
         run: node test/regressions-r3.js
       - name: Managed installs (Postgres part skipped)
         run: node test/managed.js
+      - name: Coding-tool clients (--client, skill, Codex, Cursor)
+        run: node test/clients.js && node test/clients-codex.js && node test/clients-cursor.js

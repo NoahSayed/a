@@ -7,6 +7,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IS_WIN, connectAgent, rmrf, runCli, skip, summary, test } from "./harness.js";
 import { sqliteBackend } from "./backends.js";
+import { parse as parseToml } from "smol-toml";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { baseEnv } from "./harness.js";
+
+// The bridge entry each tool would launch, read from that tool's own file.
+const entryFor = (client, r) =>
+  client === "codex"
+    ? parseToml(readFileSync(join(r, ".codex", "config.toml"), "utf8")).mcp_servers.bridge
+    : JSON.parse(readFileSync(join(r, client === "cursor" ? ".cursor/mcp.json" : ".mcp.json"), "utf8")).mcpServers.bridge;
+
+// Start the server the way that tool does: its command, args and env, in the repo (Codex: the entry's cwd).
+async function launch(client, r) {
+  const e = entryFor(client, r);
+  const c = new Client({ name: `as-${client}`, version: "0" });
+  await c.connect(new StdioClientTransport({ command: e.command, args: e.args, env: { ...baseEnv(HOME), ...e.env }, cwd: e.cwd || r }));
+  const call = async (tool, args = {}) => (await c.callTool({ name: tool, arguments: args })).content.map((x) => x.text).join("\n");
+  return { call, close: () => c.close() };
+}
 
 const tmp = mkdtempSync(join(tmpdir(), "agent-bridge-clients-"));
 const HOME = join(tmp, "home");
@@ -150,6 +169,47 @@ try {
     } finally {
       await a.close();
       await b.cleanup?.();
+    }
+  });
+
+  await test("--client all writes every tool's config and skill folder", async () => {
+    const r = repo();
+    const out = await runCli(["init", r, "front", "--client", "all", "--hook"], env);
+    assert.equal(out.code, 0, out.err);
+    for (const f of [".mcp.json", ".claude/settings.local.json", ".cursor/mcp.json", ".cursor/hooks.json", ".codex/config.toml", ".codex/hooks.json"]) {
+      assert.ok(existsSync(join(r, f)), f);
+    }
+    for (const c of Object.keys(SKILL_AT)) assert.equal(readFileSync(join(r, ...SKILL_AT[c]), "utf8"), SKILL_SRC, c);
+    for (const c of ["claude", "cursor", "codex"]) assert.equal(entryFor(c, r).env.AGENT_NAME, "front", c);
+  });
+
+  await test("a Claude Code agent, a Cursor agent and a Codex agent, each started from its own tool's config, talk on one bridge", async () => {
+    const shared = { HOME, AGENT_BRIDGE_DB: join(tmp, "mixed.db") };
+    const repos = { claude: repo(), cursor: repo(), codex: repo() };
+    const names = { claude: "api", cursor: "web", codex: "jobs" };
+    for (const c of Object.keys(repos)) {
+      const out = await runCli(["init", repos[c], names[c], `the ${names[c]} project`, "--client", c, "--no-skill"], shared);
+      assert.equal(out.code, 0, out.err);
+    }
+    const a = {};
+    try {
+      for (const c of Object.keys(repos)) a[c] = await launch(c, repos[c]);
+      for (const c of Object.keys(repos)) assert.match(await a[c].call("whoami"), new RegExp(`"${names[c]}"`));
+      // api (Claude) -> web (Cursor) -> jobs (Codex) -> api (Claude), each a new thread, then a reply back
+      await a.claude.call("send_message", { to: "web", subject: "login", body: "renamed user_id to userId in POST /login" });
+      assert.match(await a.cursor.call("check_inbox"), /from: api[\s\S]*userId/);
+      await a.cursor.call("send_message", { to: "jobs", body: "please re-run the user export after api deploys", type: "fyi" });
+      assert.match(await a.codex.call("check_inbox"), /from: web[\s\S]*user export/);
+      await a.codex.call("send_message", { to: "api", body: "when is the deploy?" });
+      const got = await a.claude.call("check_inbox");
+      assert.match(got, /from: jobs[\s\S]*deploy/);
+      const thread = got.match(/thread[_ ]id[:= ]+"?([0-9a-f-]{36})/i)?.[1] ?? got.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/)[1];
+      await a.claude.call("send_message", { to: "jobs", body: "today 16:00 UTC", type: "response", thread_id: thread });
+      assert.match(await a.codex.call("wait_for_message", { timeout_seconds: 5 }), /today 16:00 UTC/);
+      const agents = await a.cursor.call("list_agents");
+      for (const n of Object.values(names)) assert.match(agents, new RegExp(`"${n}"`));
+    } finally {
+      for (const x of Object.values(a)) await x.close();
     }
   });
 
