@@ -383,7 +383,8 @@ notifications = true
     const c = cfgOf(r);
     assert.deepEqual(Object.keys(c), ["mcp_servers"]);
     assert.deepEqual(c.mcp_servers.bridge.env, { AGENT_NAME: "alpha", [nasty]: nasty, AGENT_DESCRIPTION: nasty });
-    const weird = repo('weird "dir" [x]\\y\nz');
+    // a double quote and a newline can't be in a Windows folder name; brackets and spaces can
+    const weird = repo(IS_WIN ? "weird dir [x] 'q' y" : 'weird "dir" [x]\\y\nz');
     codex.writeConfig({ repoDir: weird, name: "alpha", env: { AGENT_NAME: "alpha" }, withHook: true, log: () => {} });
     assert.equal(bridgeOf(weird).cwd, weird);
   });
@@ -700,7 +701,9 @@ notifications = true
     assert.match(res.out, /next \(Claude Code\)/);
     assert.match(res.out, /next \(Codex\)/);
     // the Claude hook still prints plain text, the Codex hook JSON
-    assert.match(readJson(join(r, ".claude", "settings.local.json")).hooks.UserPromptSubmit[0].hooks[0].command, /peek/);
+    // on Windows the Claude hook is exec form: peek is in args, not in command
+    const ch = readJson(join(r, ".claude", "settings.local.json")).hooks.UserPromptSubmit[0].hooks[0];
+    assert.match([ch.command, ...(ch.args ?? [])].join(" "), /peek/);
   });
 
   await test("readServerEnv round-trips the env (including a hostile description) and is null without a file", async () => {
