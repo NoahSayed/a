@@ -48,6 +48,29 @@ for (const make of await backendsFromArgs()) {
       });
     }
 
+    if (b.kind === "sqlite") {
+      await test("opening a new mailbox while another process holds a write reservation waits instead of failing", async () => {
+        // Deterministic version of the startup race: with another connection holding a RESERVED lock
+        // (BEGIN IMMEDIATE) on a database still in rollback mode, "PRAGMA journal_mode = WAL" answers
+        // "database is locked" at once, without calling the busy handler. The store must retry.
+        const env = b.envFor("ping");
+        const dbPath = env.AGENT_BRIDGE_DB.replace(/bridge\.db$/, "reserved-start.db");
+        const holder = spawn(
+          process.execPath,
+          ["-e", `const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync(${JSON.stringify(dbPath)});` +
+            `d.exec("CREATE TABLE IF NOT EXISTS x(y)");d.exec("BEGIN IMMEDIATE");console.log("held");` +
+            `setTimeout(()=>{d.exec("COMMIT");d.close();},700)`],
+          { stdio: ["ignore", "pipe", "ignore"] }
+        );
+        await new Promise((r) => holder.stdout.once("data", r));
+        const t0 = Date.now();
+        const res = await worker({ ...env, AGENT_BRIDGE_DB: dbPath, AGENT_NAME: "late" }, "send", { to: "ping", body: "hi" });
+        assert.equal(res.length, 1);
+        assert.ok(Date.now() - t0 >= 300, "it really had to wait for the reservation");
+        await new Promise((r) => (holder.exitCode !== null ? r() : holder.on("exit", r)));
+      });
+    }
+
     for (const a of ["ping", "pong", "reader"]) await b.addAgent(a);
     // load/attack tests send far faster than a real agent; the abuse limits have their own tests
     restoreLimits = await b.setLimits({ ratePerMinute: 10000, maxUnreadPerSender: 100000 });
