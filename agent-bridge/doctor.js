@@ -550,22 +550,47 @@ export function probeDestination(env) {
   return null;
 }
 
-export function envFromRepo(repoDir, base = process.env) {
-  const p = join(resolve(repoDir), ".mcp.json");
-  if (!existsSync(p)) throw new BridgeError(`no .mcp.json in ${resolve(repoDir)}; run "cli.js init" first.`);
-  let cfg;
-  try {
-    cfg = JSON.parse(readFileSync(p, "utf8"));
-  } catch (e) {
-    throw new BridgeError(`${p} is not valid JSON: ${e.message}`);
+// Which client's file `doctor <repo>` reads: the given one, else the first that exists, in this order.
+export const REPO_CONFIG_FILES = { claude: ".mcp.json", cursor: ".cursor/mcp.json", codex: ".codex/config.toml" };
+
+export async function envFromRepo(repoDir, base = process.env, { client } = {}) {
+  const dir = resolve(repoDir);
+  if (client && !REPO_CONFIG_FILES[client]) throw new BridgeError(`unknown client "${client}" (use claude, cursor or codex)`);
+  const order = client ? [client] : Object.keys(REPO_CONFIG_FILES);
+  const found = order.find((c) => existsSync(join(dir, REPO_CONFIG_FILES[c])));
+  if (!found) {
+    const names = order.map((c) => REPO_CONFIG_FILES[c]).join(", ");
+    throw new BridgeError(`no ${names} in ${dir}; run "cli.js init" first.`);
   }
-  const srv = cfg.mcpServers?.bridge;
-  if (!srv) throw new BridgeError(`${p} has no "bridge" server; run "cli.js init" first.`);
+  const p = join(dir, REPO_CONFIG_FILES[found]);
+  let srvEnv;
+  if (found === "claude") {
+    let cfg;
+    try {
+      cfg = JSON.parse(readFileSync(p, "utf8"));
+    } catch (e) {
+      throw new BridgeError(`${p} is not valid JSON: ${e.message}`);
+    }
+    const srv = cfg.mcpServers?.bridge;
+    if (!srv) throw new BridgeError(`${p} has no "bridge" server; run "cli.js init" first.`);
+    srvEnv = srv.env;
+  } else {
+    // Cursor / Codex formats are parsed by their client module (clients/<client>.js).
+    const mod = await import(`./clients/${found}.js`);
+    let r;
+    try {
+      r = mod.readServerEnv(dir);
+    } catch (e) {
+      throw new BridgeError(`${p} could not be read: ${e.message}`);
+    }
+    if (!r || !r.env || !Object.keys(r.env).length) throw new BridgeError(`${p} has no "bridge" server; run "cli.js init --client ${found}" first.`);
+    srvEnv = r.env;
+  }
   const taken = {};
   const ignored = [];
-  for (const [k, v] of Object.entries(srv.env || {})) {
+  for (const [k, v] of Object.entries(srvEnv || {})) {
     if (REPO_ENV_KEYS.has(k) && typeof v === "string") taken[k] = v;
     else ignored.push(k);
   }
-  return { env: { ...base, ...taken }, path: p, ignored };
+  return { env: { ...base, ...taken }, path: p, ignored, client: found };
 }

@@ -13,6 +13,7 @@ import { CLIENTS, PEEK_ENV_KEYS, PEEK_PROCESS_KEYS, PEEK_REEXEC_GUARD } from "./
 import * as claudeClient from "./clients/claude.js";
 import * as cursorClient from "./clients/cursor.js";
 import * as codexClient from "./clients/codex.js";
+import { installSkill } from "./clients/skill.js";
 
 const CLIENT_MODULES = { claude: claudeClient, cursor: cursorClient, codex: codexClient };
 
@@ -20,8 +21,10 @@ const HERE = fileURLToPath(new URL(".", import.meta.url));
 const HELP = `agent-bridge CLI
 
 Setup
-  init <repo> <name> ["desc"] [--hook] [--supabase | --relay] [--token-file <path>]
-                                  wire a repo's .mcp.json to the bridge (and optional hook)
+  init <repo> <name> ["desc"] [--client claude|cursor|codex|all] [--hook] [--no-skill]
+       [--supabase | --relay | --slack] [--token-file <path>]
+                                  wire a repo to the bridge for each client (default claude): its MCP
+                                  config, the agent-bridge skill, and with --hook the unread-mail hook
        --hook-form shell|exec     "shell": one POSIX shell command (default on macOS/Linux);
                                   "exec": command + args, no shell (default on Windows)
   managed-config [--node P] [--server P]
@@ -42,7 +45,8 @@ Supabase admin (needs SUPABASE_URL + SUPABASE_SECRET_KEY)
   limits [--rate N] [--max-unread N] [--max-mb-day N]
                                        show or change the per-agent abuse limits
   purge [days=30]                      delete messages older than N days
-  doctor [repo] [--probe]              diagnose the setup (this shell, or the repo's .mcp.json); exit 1 on FAIL.
+  doctor [repo] [--probe] [--client C] diagnose the setup (this shell, or the repo's .mcp.json, .cursor/mcp.json
+                                       or .codex/config.toml); exit 1 on FAIL.
                                        With a repo, the network check needs --probe (it sends the agent's token)
   save-token <name>                    read a token from stdin into ~/.agent-bridge/tokens/<name>.token
 Relay admin: the same commands (add-agent ... purge) work against a self-hosted relay.js when
@@ -333,6 +337,11 @@ async function main() {
       }
       for (const c of clients) {
         CLIENT_MODULES[c].writeConfig({ repoDir, name, env: { ...env }, withHook: flags.has("--hook"), hookForm, summary, notes });
+        // The skill: plain instructions (when to message, how, safety rules), no paths or secrets, safe to commit.
+        if (!flags.has("--no-skill")) {
+          const p = installSkill(repoDir, c);
+          if (p) console.log(`wrote ${p}  (agent-bridge skill)`);
+        }
       }
       break;
     }
@@ -535,9 +544,10 @@ async function main() {
       let where = "this shell's environment";
       let fromRepo = false;
       if (args[0]) {
-        const r = envFromRepo(args[0]);
+        // --client picks which file to read; default: the first of .mcp.json, .cursor/mcp.json, .codex/config.toml.
+        const r = await envFromRepo(args[0], process.env, { client: flagValue("--client") });
         env = r.env;
-        execArgv = []; // Claude Code starts the server, not this process
+        execArgv = []; // the coding tool starts the server, not this process
         where = r.path;
         fromRepo = true;
         if (r.ignored.length) console.log(`note: ignored settings in ${r.path} that aren't bridge settings: ${r.ignored.join(", ")}`);

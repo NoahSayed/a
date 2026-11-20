@@ -1,7 +1,7 @@
 // Mutation testing: break one safety property at a time and check that a suite notices.
 // A mutation that "survives" (all tests still pass) means a guard isn't really tested.
 //   node test/mutations.js        (needs the local Postgres used by supabase-local)
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -676,7 +676,30 @@ const MUTATIONS = [
   { name: "R3-04 doctor probes a repo's backend without --probe", file: "cli.js",
     find: "allowNetwork: !fromRepo || flags.has(\"--probe\")", replace: "allowNetwork: true",
     suite: ["test/regressions-r3.js"] },
+  // ---- multi-client: --client, the skill, doctor per client (test/clients.js)
+  { name: "MC skill written through a symlink", file: "clients/skill.js",
+    find: "  for (const p of [...dirs, dest]) refuseSymlink(p);", replace: "", suite: ["test/clients.js"] },
+  { name: "MC identical skill rewritten on every init", file: "clients/skill.js",
+    find: `  if (existsSync(dest) && readFileSync(dest, "utf8") === readFileSync(SKILL_SRC, "utf8")) return null;`, replace: "", suite: ["test/clients.js"] },
+  { name: "MC --no-skill ignored", file: "cli.js",
+    find: `        if (!flags.has("--no-skill")) {`, replace: `        if (true) {`, suite: ["test/clients.js"] },
+  { name: "MC unknown --client silently becomes claude", file: "cli.js",
+    find: "    else throw new Error(`--client: unknown client \"${v}\" (use claude, cursor, codex or all)`);",
+    replace: `    else out.add("claude");`, suite: ["test/clients.js"] },
+  { name: "MC description from an earlier init lost", file: "cli.js",
+    find: "          if (prev) { env.AGENT_DESCRIPTION = prev; break; }", replace: "", suite: ["test/clients.js"] },
+  { name: "MC doctor accepts an unknown --client", file: "doctor.js",
+    find: "  if (client && !REPO_CONFIG_FILES[client]) throw new BridgeError(`unknown client \"${client}\" (use claude, cursor or codex)`);",
+    replace: "", suite: ["test/clients.js"] },
+  { name: "MC peek crashes on an unknown --format", file: "cli.js",
+    find: "        if (mod) process.stdout.write(mod.peekOutput(", replace: "        process.stdout.write(mod.peekOutput(", suite: ["test/clients.js"] },
 ];
+
+// Client-specific mutations live next to their suites (test/mutations-<client>.js, default export: an array).
+for (const c of ["codex", "cursor"]) {
+  const url = new URL(`./mutations-${c}.js`, import.meta.url);
+  if (existsSync(fileURLToPath(url))) MUTATIONS.push(...(await import(url)).default);
+}
 
 // Optional: node test/mutations.js "<part of a name>" ... runs only matching mutations.
 // node test/mutations.js --check only verifies that every mutation still finds its target text
