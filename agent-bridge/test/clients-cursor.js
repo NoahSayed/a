@@ -700,14 +700,29 @@ sys.stdout.write(out.decode(errors="replace"))
 
   console.log("\n=== cursor: project folder as the agent's name (managed installs) ===");
 
-  await test("CURSOR_PROJECT_DIR names the agent after the project folder, below AGENT_BRIDGE_PROJECT_DIR and CLAUDE_PROJECT_DIR", async () => {
+  await test("an inherited CURSOR_PROJECT_DIR never names the agent (R4-11); AGENT_BRIDGE_PROJECT_DIR and CLAUDE_PROJECT_DIR still do", async () => {
     const base = { AGENT_BRIDGE_NAME_FROM: "project" };
-    assert.equal(resolveIdentityEnv({ ...base, CURSOR_PROJECT_DIR: "/work/My App" }, "/elsewhere/cwd").AGENT_NAME, "my-app");
+    assert.equal(resolveIdentityEnv({ ...base, CURSOR_PROJECT_DIR: "/work/payments" }, "/work/billing").AGENT_NAME, "billing");
     assert.equal(resolveIdentityEnv({ ...base, CURSOR_PROJECT_DIR: "/work/cur", CLAUDE_PROJECT_DIR: "/work/cla" }, "/x/cwd").AGENT_NAME, "cla");
-    assert.equal(resolveIdentityEnv({ ...base, CURSOR_PROJECT_DIR: "/work/cur", CLAUDE_PROJECT_DIR: "/work/cla", AGENT_BRIDGE_PROJECT_DIR: "/work/own" }, "/x/cwd").AGENT_NAME, "own");
+    assert.equal(resolveIdentityEnv({ ...base, CURSOR_PROJECT_DIR: "/work/cur", AGENT_BRIDGE_PROJECT_DIR: "/work/own" }, "/x/cwd").AGENT_NAME, "own");
     assert.equal(resolveIdentityEnv(base, "/x/the-cwd").AGENT_NAME, "the-cwd");
     assert.equal(resolveIdentityEnv({ ...base, AGENT_NAME: "explicit", CURSOR_PROJECT_DIR: "/work/cur" }, "/x").AGENT_NAME, "explicit");
     assert.equal(agentNameFromDir("/a/b/Proj_1"), "proj_1");
+  });
+
+  await test("as a Cursor hook, peek names a project-named agent after the workspace folder Cursor sends (not an inherited variable)", async () => {
+    const folder = repo("Hook Proj");
+    const db = join(tmp, "hookproj.db");
+    const env = { HOME, AGENT_BRIDGE_DB: db };
+    const sent = await runCli(["send", "hook-proj", "hello there"], { ...env, AGENT_NAME: "sender" });
+    assert.equal(sent.code, 0, sent.err);
+    const inp = JSON.stringify({ hook_event_name: "beforeSubmitPrompt", cursor_version: "3.0.0", workspace_roots: [folder] });
+    const named = await runCli(["peek", "--format", "cursor", "--event", "beforeSubmitPrompt"], { ...env, AGENT_BRIDGE_NAME_FROM: "project" }, { input: inp });
+    assert.match(JSON.parse(named.out).additional_context ?? "", /1 from sender/);
+    // a relative "workspace" is not used
+    const rel = JSON.stringify({ hook_event_name: "beforeSubmitPrompt", cursor_version: "3.0.0", workspace_roots: ["Hook Proj"] });
+    const relOut = await runCli(["peek", "--format", "cursor", "--event", "beforeSubmitPrompt"], { ...env, AGENT_BRIDGE_NAME_FROM: "project" }, { input: rel });
+    assert.ok(!/1 from sender/.test(relOut.out), relOut.out);
   });
 
   await test("a server started the way Cursor would from a managed entry (AGENT_BRIDGE_PROJECT_DIR = the substituted ${workspaceFolder}) is named after the folder", async () => {
@@ -722,10 +737,10 @@ sys.stdout.write(out.decode(errors="replace"))
       } finally {
         await a.close();
       }
-      // Cursor-only variable, no AGENT_BRIDGE_PROJECT_DIR
+      // an inherited CURSOR_PROJECT_DIR alone does not rename the server (R4-11)
       const c = await connectAgent(b, "x", { AGENT_NAME: "", AGENT_BRIDGE_NAME_FROM: "project", CURSOR_PROJECT_DIR: folder });
       try {
-        assert.equal(JSON.parse((await c.call("whoami")).text).agent, "cursor-proj");
+        assert.notEqual(JSON.parse((await c.call("whoami")).text).agent, "cursor-proj");
       } finally {
         await c.close();
       }

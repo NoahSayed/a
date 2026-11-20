@@ -97,9 +97,9 @@ const intEnv = (v) => (v != null && v !== "" && Number.isFinite(Number(v)) ? Num
 // ------------------------------------------------------------------ managed installs
 // One machine-wide managed-mcp.json entry can serve every project: with AGENT_BRIDGE_NAME_FROM=project
 // the agent's name is its project folder's name, and "{agent}" in a token-file path becomes that name.
-// The project folder is AGENT_BRIDGE_PROJECT_DIR, else CLAUDE_PROJECT_DIR, else CURSOR_PROJECT_DIR (set by Cursor's hooks),
-// else the working directory. (Cursor's mcp.json is reported to expand "${workspaceFolder}", which could set
-// AGENT_BRIDGE_PROJECT_DIR; not verified, see docs/clients/cursor.md.)
+// The project folder is AGENT_BRIDGE_PROJECT_DIR, else CLAUDE_PROJECT_DIR, else the working directory. An inherited
+// CURSOR_PROJECT_DIR is deliberately not used (R4-11): any process started from a Cursor terminal has it. peek,
+// when it runs as a Cursor hook, passes Cursor's workspace folder as AGENT_BRIDGE_PROJECT_DIR instead.
 export function agentNameFromDir(dir) {
   const base = basename(resolve(dir || "."));
   const name = base
@@ -122,7 +122,6 @@ export function resolveIdentityEnv(env = process.env, cwd = process.cwd()) {
   const from = (env.AGENT_BRIDGE_NAME_FROM || "").trim().toLowerCase();
   if (from && from !== "project") throw new BridgeError(`AGENT_BRIDGE_NAME_FROM must be "project", got "${from}".`);
   if (!(out.AGENT_NAME || "").trim() && from === "project") {
-    cwd = env.CURSOR_PROJECT_DIR || cwd; // last fallback before the working directory
     out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);
   }
   for (const k of AGENT_PLACEHOLDER_VARS) {

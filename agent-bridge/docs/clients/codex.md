@@ -28,11 +28,12 @@ Then, in the repo:
    real binary: `codex mcp list --json` prints `[]` for an untrusted project.
    Trust is recorded for the git root, or for the folder Codex was started in when there is no git root
    (`config/src/project_trust.rs`, `config/src/loader/mod.rs:1156`).
-2. With `--hook`: Codex shows **"Hooks need review"** on start-up. Choose **Trust all and continue** (or open `/hooks` and
-   trust the one entry). Until then the hook is listed but does **not** run. `init` cannot do this for you, by design: trust
+2. With `--hook`: Codex shows **"Hooks need review"** on start-up. Open `/hooks` and trust the agent-bridge entry (its
+   command runs `cli.js peek <name>`). Use "Trust all" only if you have read every hook in `.codex/hooks.json`: a cloned
+   repo can ship its own, and `init` keeps them (it prints a WARNING listing each one). Until then the hook is listed but does **not** run. `init` cannot do this for you, by design: trust
    is stored in the user's own `~/.codex/config.toml` (`[hooks.state."<key>"] trusted_hash`), and Codex reads hook trust only
    from the user and session layers, never from a project file (`hooks/src/config_rules.rs`).
-3. The first call of each bridge tool asks for approval. Choose **always allow** to stop the questions (see "Approvals").
+3. `send_message` asks for approval before it sends; the other tools run without asking (see "Approvals").
 
 `.codex/config.toml` holds absolute paths for this machine, so you probably want `.codex/` in `.gitignore`. As with
 `.mcp.json`, a committed project config that names a command is something every collaborator who trusts the project will run.
@@ -54,7 +55,7 @@ Re-running `init` for the same agent replaces the entry and the hook; it does no
 | MCP server environment | **Not** the parent's. Codex starts a stdio server with only `HOME LOGNAME PATH SHELL USER LANG LC_ALL TERM TMPDIR TZ` (a longer list on Windows), the custom-CA variables, any names listed in `env_vars`, and then the entry's `env` table, which is merged on top (entry wins). So `AGENT_NAME`, `CLAUDE_PROJECT_DIR`, proxy settings etc. from your shell do **not** reach the server. | `rmcp-client/src/utils.rs:16`; verified with the real binary |
 | MCP server working directory | The entry's `cwd` if set, otherwise the session's working directory (the folder Codex was started in, which may be a sub-folder of the repo). `init` sets `cwd` to the repo so `list_agents` shows the repo whichever folder Codex was started in. | `rmcp-client/src/stdio_server_launcher.rs:454-473`, `core/src/session/mcp_runtime.rs:88`; verified |
 | MCP timeouts | `startup_timeout_sec` default 30, `tool_timeout_sec` default **300**. | `codex-mcp/src/rmcp_client.rs:124-125`, `connection_manager.rs:599` |
-| Approval for MCP tool calls | In the default mode a tool call needs approval unless the tool declares `readOnlyHint: true` (or both `destructiveHint` and `openWorldHint` false). The bridge's tools declare no annotations, so each tool asks until you choose "always allow". That answer is stored as `[mcp_servers.bridge.tools.<tool>] approval_mode = "approve"` in the **project's** `.codex/config.toml`. | `core/src/mcp_tool_call.rs:2878` (`requires_mcp_tool_approval`), `:2758-2830` (persisting) |
+| Approval for MCP tool calls | In the default mode a tool call needs approval unless the tool declares `readOnlyHint: true` (or both `destructiveHint` and `openWorldHint` false). The bridge's annotations (in `server.js`): `whoami`, `list_agents`, `get_thread` are read-only; `check_inbox` and `wait_for_message` are not destructive and not open-world; `send_message` is open-world. So in Codex only `send_message` asks, until you choose "always allow". That answer is stored as `[mcp_servers.bridge.tools.<tool>] approval_mode = "approve"` in the **project's** `.codex/config.toml`. | `core/src/mcp_tool_call.rs:2878` (`requires_mcp_tool_approval`), `:2758-2830` (persisting) |
 | Which project-config keys are ignored | `openai_base_url`, `chatgpt_base_url`, `model_provider(s)`, `notify`, `profile(s)`, `otel` and a few realtime URLs are dropped from a project's config. MCP servers and hooks are not. | `config/src/loader/mod.rs:104` |
 
 ### `tool_timeout_sec = 660`
@@ -86,9 +87,11 @@ init checks that the entry reads back exactly as intended **and that nothing out
 nothing. Both files are validated before either is written.
 
 Inside the entry `init` owns `command`, `args`, `env`, `cwd` and `tool_timeout_sec` (and drops the keys of another transport,
-`url` and friends, which Codex rejects next to `command`, and an `[mcp_servers.bridge.env]` sub-table). Everything else is
-kept, including what Codex itself stores there: `[mcp_servers.bridge.tools.*] approval_mode`, `default_tools_approval_mode`,
-`startup_timeout_sec`, `enabled_tools`, `env_vars`.
+`url` and friends, which Codex rejects next to `command`, and an `[mcp_servers.bridge.env]` sub-table). It also **drops
+approvals**: `default_tools_approval_mode` and `[mcp_servers.bridge.tools.*] approval_mode`, because a cloned repo could
+ship them so that sending never asks (round 4, R4-04); `init` says when it removed them, and Codex asks again. Everything
+else is kept: `startup_timeout_sec`, `enabled_tools`, `env_vars`. Files over 1 MiB, symlinks and anything that isn't a
+regular file are refused.
 
 `init` refuses (and says why) when the existing file does not parse, when the entry is written with dotted keys or an
 inline table (`mcp_servers.bridge.command = ...`, `bridge = { ... }`), or when it is an array of tables. Rewrite it as a
@@ -99,10 +102,10 @@ approved hook stays approved when nothing changed); other hooks, other events an
 
 ## Approvals and what to expect
 
-* Every bridge tool call asks for approval the first time, because the tools carry no `readOnlyHint`. "Always allow" is
-  remembered per tool in `.codex/config.toml`. If you trust the bridge outright, add
-  `default_tools_approval_mode = "approve"` to `[mcp_servers.bridge]` (`init` keeps it). `codex exec` (non-interactive)
-  cannot ask, so approve the tools in advance this way if you run it.
+* Only `send_message` asks for approval (see the annotations above); the read tools run without asking. "Always allow" is
+  remembered in `.codex/config.toml`. `codex exec` (non-interactive) cannot ask, so to let it send, add
+  `default_tools_approval_mode = "approve"` to `[mcp_servers.bridge]` yourself, after `init` (which removes it on every
+  run, see "Merging").
 * The hook only runs when **you** submit a prompt, like the Claude Code hook. An agent that is mid-task is not interrupted by
   new mail; it sees it at the next prompt, or when it calls `check_inbox` / `wait_for_message`.
 * A hook failure never blocks your prompt: `peek` swallows its own errors and exits 0 (set `AGENT_BRIDGE_DEBUG=1` to see them).

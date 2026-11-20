@@ -89,6 +89,8 @@ jobs:
         run: node test/managed.js
       - name: Coding-tool clients (--client, skill, Codex, Cursor)
         run: node test/clients.js && node test/clients-codex.js && node test/clients-cursor.js
+      - name: Adversary round 4 regressions (multi-client init, doctor, hooks)
+        run: node test/regressions-r4.js
 
   # macOS and Windows runners have no Postgres service containers, so only the suites that never touch
   # Postgres run here (SQLite and the Slack stand-in, plus the CLI/regression parts that need no database).
@@ -139,3 +141,5 @@ jobs:
         run: node test/managed.js
       - name: Coding-tool clients (--client, skill, Codex, Cursor)
         run: node test/clients.js && node test/clients-codex.js && node test/clients-cursor.js
+      - name: Adversary round 4 regressions (multi-client init, doctor, hooks)
+        run: node test/regressions-r4.js

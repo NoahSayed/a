@@ -4,12 +4,12 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dlpNotice } from "./stores/dlp.js";
 import { CA_VAR, maskProxyUrl, nodeSupportsEnvProxy, proxyEnvForConfig, proxyUrlHasCredentials } from "./proxy.js";
-import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, readSecret, resolveDbPath } from "./store.js";
-import { CLIENTS, PEEK_ENV_KEYS, PEEK_PROCESS_KEYS, PEEK_REEXEC_GUARD } from "./clients/common.js";
+import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, readSecret, resolveDbPath, resolveIdentityEnv } from "./store.js";
+import { CLIENTS, FileTx, PEEK_ENV_KEYS, PEEK_PROCESS_KEYS, PEEK_REEXEC_GUARD, isSecretSupabaseKey } from "./clients/common.js";
 import * as claudeClient from "./clients/claude.js";
 import * as cursorClient from "./clients/cursor.js";
 import * as codexClient from "./clients/codex.js";
@@ -63,15 +63,23 @@ Environment: AGENT_BRIDGE_DB (local), SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY,
 AGENT_BRIDGE_TOKEN or AGENT_BRIDGE_TOKEN_FILE (Supabase, relay), RELAY_URL (relay), SLACK_CHANNEL_ID,
 SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_FILE (Slack). See README.md.`;
 
-const argv = process.argv.slice(2);
+const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form", "--from", "--to", "--node", "--server", "--client", "--format", "--event", "--cursor-events"]);
+const BOOL_FLAGS = new Set(["--hook", "--no-skill", "--probe", "--relay", "--save", "--slack", "--supabase", "--check"]);
+// --name=value is the same as --name value (R4-13): for a value flag, split it in two.
+const argv = process.argv.slice(2).flatMap((a) => {
+  const m = /^(--[a-z-]+)=(.*)$/s.exec(a);
+  return m && VALUE_FLAGS.has(m[1]) ? [m[1], m[2]] : [a];
+});
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const flagValue = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const VALUE_FLAGS = new Set(["--token-file", "--rate", "--max-unread", "--max-mb-day", "--set", "--hook-form", "--from", "--to", "--node", "--server", "--client", "--format", "--event", "--cursor-events"]);
 const positional = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 const [cmd, ...args] = positional;
+// A misspelled or unknown flag is an error, not silently ignored (R4-13). peek is the exception: it runs as a
+// hook and must never fail loudly, so it ignores what it doesn't know.
+const unknownFlags = argv.filter((a, i) => a.startsWith("--") && !VALUE_FLAGS.has(a) && !BOOL_FLAGS.has(a) && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 
 // Let stdout/stderr drain before process.exit(), which can cut off piped output on some platforms.
 const flush = () => new Promise((r) => process.stdout.write("", () => process.stderr.write("", r)));
@@ -122,6 +130,9 @@ async function admin() {
 }
 
 async function main() {
+  if (cmd !== "peek" && unknownFlags.length) {
+    throw new Error(`unknown option ${unknownFlags.join(", ")}. Run "cli.js" with no arguments for the list.`);
+  }
   switch (cmd) {
     case "whoami": {
       const store = await createStore({ agentName: process.env.AGENT_NAME || "human" });
@@ -238,7 +249,14 @@ async function main() {
           await flush();
           process.exit(0);
         }
-        const agent = args[0] || env.AGENT_NAME;
+        // As a Cursor hook, the project folder (for AGENT_BRIDGE_NAME_FROM=project) is the absolute workspace
+        // folder Cursor names in the hook input, never an inherited CURSOR_PROJECT_DIR (R4-11).
+        if (format === "cursor" && !env.AGENT_BRIDGE_PROJECT_DIR) {
+          const ws = cursorClient.workspaceOf(hookInput, {});
+          if (ws && isAbsolute(ws)) env = { ...env, AGENT_BRIDGE_PROJECT_DIR: ws };
+        }
+        // The agent's name: the argument, AGENT_NAME, or (AGENT_BRIDGE_NAME_FROM=project) the project folder's name.
+        const agent = args[0] || resolveIdentityEnv(env).AGENT_NAME;
         if (backendFromEnv(env) === "sqlite" && !agent) return emit();
         // Short busy timeout: on SQLite the read is synchronous, so the race below can't cut it short (R1-08).
         const store = await createStore({ env, agentName: agent, busyTimeoutMs: 1500 });
@@ -311,7 +329,11 @@ async function main() {
               `or "save-token ${name}" (token from your admin), then re-run init.`
           );
         }
-        // Secrets stay out of the repo: .mcp.json only points at the token file.
+        // Secrets stay out of the repo: .mcp.json only points at the token file. The project's secret key gives
+        // full access to the database and must never be written into a repo file (R4-03).
+        if (isSecretSupabaseKey(key)) {
+          throw new Error("SUPABASE_PUBLISHABLE_KEY holds a secret key (sb_secret_... or a service_role JWT); agents get the publishable key (sb_publishable_...). Nothing was written.");
+        }
         env = {
           AGENT_NAME: name,
           AGENT_BRIDGE_BACKEND: "supabase",
@@ -356,24 +378,36 @@ async function main() {
       const notes = proxyNotes.length
         ? [`proxy/TLS settings from your shell were written to the server's env (and the hook):\n${proxyNotes.join("\n")}`]
         : [];
-      // Keep a description an earlier init stored (in any client's file) when none is given now.
+      // Keep a description an earlier init stored (in any client's file) when none is given now. Another tool's
+      // file that can't be read or parsed just has no description (R4-05).
       if (descParts.length) env.AGENT_DESCRIPTION = descParts.join(" ");
       else {
         for (const c of CLIENTS) {
+          // readServerEnv never throws: a file it can't read or parse comes back with `error` set
           const prev = CLIENT_MODULES[c].readServerEnv(repoDir)?.env?.AGENT_DESCRIPTION;
-          if (prev) { env.AGENT_DESCRIPTION = prev; break; }
+          if (typeof prev === "string" && prev) {
+            env.AGENT_DESCRIPTION = prev;
+            break;
+          }
         }
       }
       // --cursor-events is validated before any client's files are written
       const cursorEvents = clients.includes("cursor") ? cursorClient.parseEvents(flagValue("--cursor-events")) : undefined;
+      // Every tool's files (and skills) are planned first and written only if every step succeeded, so a refusal
+      // for one tool leaves the repo exactly as it was (R4-01). The "wrote ..." lines are printed after the writes.
+      const tx = new FileTx();
+      const out = [];
+      const log = (l) => out.push(l);
       for (const c of clients) {
-        CLIENT_MODULES[c].writeConfig({ repoDir, name, env: { ...env }, withHook: flags.has("--hook"), hookForm, summary, notes, cursorEvents });
+        CLIENT_MODULES[c].writeConfig({ repoDir, name, env: { ...env }, withHook: flags.has("--hook"), hookForm, summary, notes, cursorEvents, tx, log });
         // The skill: plain instructions (when to message, how, safety rules), no paths or secrets, safe to commit.
         if (!flags.has("--no-skill")) {
-          const p = installSkill(repoDir, c);
-          if (p) console.log(`wrote ${p}  (agent-bridge skill)`);
+          const r = installSkill(repoDir, c, tx);
+          if (r) log(`wrote ${r.path}  (agent-bridge skill)` + (r.backup ? `\n  the SKILL.md that was there differed from this version; kept as ${r.backup}` : ""));
         }
       }
+      tx.commit();
+      for (const l of out) console.log(l);
       break;
     }
 
@@ -521,7 +555,7 @@ async function main() {
       } else if (backend === "supabase") {
         const key = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
         if (!process.env.SUPABASE_URL || !key) throw new Error("managed-config for Supabase needs SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.");
-        if (/^sb_secret_/.test(key)) throw new Error("SUPABASE_PUBLISHABLE_KEY holds a secret key; use the publishable key.");
+        if (isSecretSupabaseKey(key)) throw new Error("SUPABASE_PUBLISHABLE_KEY holds a secret key; use the publishable key.");
         Object.assign(env, { AGENT_BRIDGE_BACKEND: "supabase", SUPABASE_URL: process.env.SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY: key });
         env.AGENT_BRIDGE_TOKEN_FILE = "~/.agent-bridge/tokens/{agent}.token";
       } else if (backend === "relay") {
@@ -583,7 +617,7 @@ async function main() {
         fromRepo = true;
         if (r.ignored.length) console.log(`note: ignored settings in ${r.path} that aren't bridge settings: ${r.ignored.join(", ")}`);
       }
-      const checks = await diagnose(env, { execArgv, allowNetwork: !fromRepo || flags.has("--probe"), source: where });
+      const checks = await diagnose(env, { execArgv, allowNetwork: !fromRepo || flags.has("--probe"), source: where, dbFromRepo: fromRepo });
       console.log(render(checks, env, `agent-bridge doctor (${where})`));
       process.exitCode = checks.some((c) => c.level === "fail") ? 1 : 0;
       break;

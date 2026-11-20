@@ -15,7 +15,7 @@ export default [
   { name: "CU an earlier hook of ours isn't replaced (re-running stacks hooks)", file: F, find: `      const kept = list.filter((x) => !ours.test(hookText(x)));`, replace: `      const kept = list;`, suite: CC },
   { name: "CU every peek hook is treated as ours (other agents' hooks removed)", file: F, find: `  const ours = ourPeekHook(name);\n  for (const ev of EVENTS) {\n    let list`, replace: `  const ours = /cli\\.js/;\n  for (const ev of EVENTS) {\n    let list`, suite: CC },
   { name: "CU empty arrays left behind for events no longer wanted", file: F, find: `list = kept.length ? kept : undefined;`, replace: `list = kept;`, suite: CC },
-  { name: "CU a non-object mcp.json is merged into", file: F, find: `    if (!isObject(doc)) throw new Error("it must be a JSON object");`, replace: ``, suite: CC },
+  { name: "CU a non-object mcp.json is merged into", file: "clients/common.js", find: `  if (!isObject(doc)) throw new Error(\`\${path}: can't merge into it (it must be a JSON object).`, replace: `  if (false) throw new Error(\`\${path}: can't merge into it (it must be a JSON object).`, suite: CC },
   { name: "CU a non-object mcpServers is overwritten", file: F, find: `  if (!isObject(mcp.mcpServers)) throw new Error(`, replace: `  if (false) throw new Error(`, suite: CC },
   { name: "CU a non-array hooks.<event> is merged into", file: F, find: `    if (doc.hooks[ev] !== undefined && !Array.isArray(doc.hooks[ev])) {`, replace: `    if (false) {`, suite: CC },
   { name: "CU unknown --cursor-events accepted", file: F, find: `    if (!EVENTS.includes(ev)) throw new Error(`, replace: `    if (false) throw new Error(`, suite: CC },
@@ -26,7 +26,7 @@ export default [
 
   // --- the hook command line
   { name: "CU POSIX words not quoted (settings run as shell code)", file: F, find: `const posixQuote = (v) => (BARE_POSIX.test(v) ? v : shq(v));`, replace: `const posixQuote = (v) => v;`, suite: CC },
-  { name: "CU PowerShell quote not doubled (a path with ' breaks out)", file: F, find: `\`'\${String(v).replace(/'/g, "''")}'\``, replace: `\`'\${String(v)}'\``, suite: CC },
+  { name: "CU PowerShell quote not doubled (a path with ' breaks out)", file: F, find: `const psQuote = (v) => (BARE_PS.test(v) ? v : psq(v));`, replace: `const psQuote = (v) => (BARE_PS.test(v) ? v : \`'\${v}'\`);`, suite: CC },
 
   // --- what the hook prints
   { name: "CU no-op answer lacks continue:true", file: F, find: `{ continue: true, additional_context: clip(notes.join("\\n")) } : { continue: true }`, replace: `{ continue: true, additional_context: clip(notes.join("\\n")) } : {}`, suite: CC },
@@ -57,5 +57,5 @@ export default [
   { name: "CU --cursor-events validated only after Claude's files are written", file: "cli.js", find: `clients.includes("cursor") ? cursorClient.parseEvents(flagValue("--cursor-events")) : undefined;`, replace: `flagValue("--cursor-events");`, suite: CC },
 
   // --- project folder as the agent's name
-  { name: "CU CURSOR_PROJECT_DIR ignored for AGENT_BRIDGE_NAME_FROM=project", file: "store.js", find: `    cwd = env.CURSOR_PROJECT_DIR || cwd; // last fallback before the working directory\n`, replace: ``, suite: CC },
+  { name: "CU an inherited CURSOR_PROJECT_DIR names the agent (R4-11)", file: "store.js", find: `    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);`, replace: `    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || env.CURSOR_PROJECT_DIR || cwd);`, suite: CC },
 ];

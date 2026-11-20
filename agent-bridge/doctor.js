@@ -9,7 +9,8 @@
 // NODE_EXTRA_CA_CERTS are read at process start and can't be applied to a running process.
 
 import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
+import { isSecretSupabaseKey, readText } from "./clients/common.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -337,9 +338,31 @@ function checkSqlite(env) {
   return out;
 }
 
-async function sqliteWriteTest(env) {
+// R4-02: opening the mailbox creates it (and its folders), sets its mode, switches it to WAL and adds tables. With
+// `doctor <repo>` the path comes from a file in the repo, so it is only opened if it is under ~/.agent-bridge/.
+export function mailboxPathIsOurs(dbPath) {
+  const root = resolve(expandHome("~/.agent-bridge"));
+  const p = resolve(dbPath);
+  if (!(p === root || p.startsWith(root + sep))) return false;
+  try {
+    if (lstatSync(p).isSymbolicLink()) return false;
+  } catch {}
+  return true;
+}
+
+async function sqliteWriteTest(env, { dbFromRepo = false, source = null } = {}) {
   const name = (env.AGENT_NAME || "").trim();
   if (!AGENT_NAME_RE.test(name)) return [];
+  if (dbFromRepo && !mailboxPathIsOurs(resolveDbPath(env.AGENT_BRIDGE_DB))) {
+    const p = resolveDbPath(env.AGENT_BRIDGE_DB);
+    return [
+      warn(
+        "Mailbox open/write",
+        `skipped: ${p} comes from ${source || "the repo"} and is outside ~/.agent-bridge/, so doctor won't open (or create) it`,
+        `If that path is right, check it from your shell: AGENT_BRIDGE_DB=${p} AGENT_NAME=${name} node cli.js doctor`
+      ),
+    ];
+  }
   try {
     const { SqliteStore } = await import("./stores/sqlite.js");
     const store = new SqliteStore({ agentName: name, dbPath: resolveDbPath(env.AGENT_BRIDGE_DB), busyTimeoutMs: 3000 });
@@ -374,7 +397,7 @@ function checkConfig(env, backend) {
       out.push(fail("SUPABASE_PUBLISHABLE_KEY", "not set", "Copy the publishable key (sb_publishable_...) from Settings → API keys."));
       out.blocked = true;
     }
-    else if (/^sb_secret_/.test(key)) out.push(fail("SUPABASE_PUBLISHABLE_KEY", `holds a SECRET key (${mask(key)})`, "Agents must only hold the publishable key. Rotate the secret key; it is now in an agent's config."));
+    else if (isSecretSupabaseKey(key)) out.push(fail("SUPABASE_PUBLISHABLE_KEY", `holds a SECRET key (${mask(key)})`, "Agents must only hold the publishable key. Rotate the secret key; it is now in an agent's config."));
     else out.push(ok("Supabase publishable key", mask(key)));
     if (env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY) {
       out.push(warn("Admin secret key in this environment", "SUPABASE_SECRET_KEY is set; agents must never have it", "Keep it only in the shell where you run admin commands."));
@@ -447,7 +470,7 @@ function checkProxy(env, backend, execArgv) {
 // ------------------------------------------------------------------ entry point
 
 // Gathers every check. `env` is the effective environment of the server being diagnosed.
-export async function diagnose(env, { execArgv = process.execArgv, probe = runProbe, allowNetwork = true, source = null } = {}) {
+export async function diagnose(env, { execArgv = process.execArgv, probe = runProbe, allowNetwork = true, source = null, dbFromRepo = false } = {}) {
   const checks = [];
   checks.push(
     nodeVersionOk()
@@ -481,7 +504,7 @@ export async function diagnose(env, { execArgv = process.execArgv, probe = runPr
   }
   // The network probe is pointless if the configuration is already broken.
   if (backend === "sqlite") {
-    if (!checks.some((c) => c.level === "fail")) checks.push(...(await sqliteWriteTest(env)));
+    if (!checks.some((c) => c.level === "fail")) checks.push(...(await sqliteWriteTest(env, { dbFromRepo, source })));
   } else if (!blocked) {
     const dest = probeDestination(env);
     if (!allowNetwork && dest) {
@@ -566,8 +589,14 @@ export async function envFromRepo(repoDir, base = process.env, { client } = {}) 
   let srvEnv;
   if (found === "claude") {
     let cfg;
+    let t;
     try {
-      cfg = JSON.parse(readFileSync(p, "utf8"));
+      t = readText(p); // a regular file of at most 1 MiB
+    } catch (e) {
+      throw new BridgeError(`${p} could not be read: ${e.message}`);
+    }
+    try {
+      cfg = JSON.parse(t);
     } catch (e) {
       throw new BridgeError(`${p} is not valid JSON: ${e.message}`);
     }

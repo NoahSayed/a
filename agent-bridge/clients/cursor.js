@@ -8,9 +8,11 @@
 //   stop                -> {"followup_message":"..."}   opt-in (--cursor-events ...,stop): after a finished turn with
 //                          unread mail, Cursor sends the agent one more message. Capped, see stopMayFollowUp().
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SERVER_JS, SERVER_NAME, hookText, ourPeekHook, peekHook, readJson, refuseSymlink, shq } from "./common.js";
+import {
+  FileTx, SERVER_JS, SERVER_NAME, foreignHooks, foreignServers, hookText, isObject, ourPeekHook, peekHook, psq, readConfigObject,
+  readText, refuseSymlink, shq, warnForeign,
+} from "./common.js";
 
 export const label = "Cursor";
 
@@ -25,7 +27,6 @@ export const STOP_LOOP_LIMIT = 2;
 const MAX_TEXT = 8000;
 const UNREAD_NOTE = /^\[agent-bridge\] You have unread bridge messages/;
 
-const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 
 // --cursor-events "sessionStart,stop" (string or array) -> a validated list. Throws before anything is written.
 export function parseEvents(value) {
@@ -44,7 +45,8 @@ export function parseEvents(value) {
 const BARE_POSIX = /^[A-Za-z0-9_.\/:=+-]+$/;
 const BARE_PS = /^[A-Za-z0-9_.\/:=+\\-]+$/;
 const posixQuote = (v) => (BARE_POSIX.test(v) ? v : shq(v));
-const psQuote = (v) => (BARE_PS.test(v) ? v : `'${String(v).replace(/'/g, "''")}'`);
+// PowerShell: the shared psq (doubles ' and the typographic quotes, refuses " and control characters; R4-12).
+const psQuote = (v) => (BARE_PS.test(v) ? v : psq(v));
 
 export function hookCommand({ form, name, env, event, platform = process.platform, nodePath = process.execPath }) {
   const h = peekHook({ form, name, env, extra: ["--format", "cursor", "--event", event], nodePath });
@@ -52,7 +54,7 @@ export function hookCommand({ form, name, env, event, platform = process.platfor
   const q = platform === "win32" ? psQuote : posixQuote;
   // the program itself is always quoted: a bare Windows path is not one word
   const [program, ...rest] = [h.command, ...h.args];
-  return [platform === "win32" ? `'${program.replace(/'/g, "''")}'` : shq(program), ...rest.map(q)].join(" ");
+  return [platform === "win32" ? psq(program) : shq(program), ...rest.map(q)].join(" ");
 }
 
 // ------------------------------------------------------------------ files
@@ -62,15 +64,7 @@ const paths = (repoDir) => ({
   hooks: join(repoDir, ".cursor", "hooks.json"),
 });
 
-function readConfig(path) {
-  try {
-    const doc = readJson(path);
-    if (!isObject(doc)) throw new Error("it must be a JSON object");
-    return doc;
-  } catch (e) {
-    throw new Error(`${path}: can't merge into it (${e.message}). Fix or remove the file, then re-run init.`);
-  }
-}
+const readConfig = readConfigObject;
 
 // Replaces our entries in a parsed hooks.json (mutates `doc`); everything else stays, `version` included.
 function mergeHooks(doc, path, { name, env, hookForm, events }) {
@@ -99,7 +93,9 @@ function mergeHooks(doc, path, { name, env, hookForm, events }) {
   }
 }
 
-export function writeConfig({ repoDir, name, env, withHook, hookForm, summary = "", notes = [], log = console.log, cursorEvents }) {
+export function writeConfig({ repoDir, name, env, withHook, hookForm, summary = "", notes = [], log = console.log, cursorEvents, tx }) {
+  const own = !tx;
+  tx ??= new FileTx();
   const events = parseEvents(cursorEvents);
   const p = paths(repoDir);
   // Everything is checked and merged in memory first, so a refusal leaves the repo untouched.
@@ -110,24 +106,26 @@ export function writeConfig({ repoDir, name, env, withHook, hookForm, summary = 
   const mcp = readConfig(p.mcp);
   mcp.mcpServers ??= {};
   if (!isObject(mcp.mcpServers)) throw new Error(`${p.mcp}: "mcpServers" must be an object. Fix the file, then re-run init.`);
+  const foreign = foreignServers(mcp.mcpServers, ".cursor/mcp.json");
   mcp.mcpServers[SERVER_NAME] = { command: process.execPath, args: [SERVER_JS], env };
 
   let hooks;
   if (withHook) {
     hooks = readConfig(p.hooks);
     mergeHooks(hooks, p.hooks, { name, env, hookForm, events });
+    foreign.push(...foreignHooks(hooks.hooks, ".cursor/hooks.json", (x) => ourPeekHook(name).test(hookText(x))));
   }
 
-  mkdirSync(p.dir, { recursive: true });
-  writeFileSync(p.mcp, JSON.stringify(mcp, null, 2) + "\n");
+  tx.write(p.mcp, JSON.stringify(mcp, null, 2) + "\n");
   const written = [p.mcp];
   log(`wrote ${p.mcp}  (agent "${name}"${summary ? ", " + summary : ""})`);
   for (const n of notes) log(n);
   if (withHook) {
-    writeFileSync(p.hooks, JSON.stringify(hooks, null, 2) + "\n");
+    tx.write(p.hooks, JSON.stringify(hooks, null, 2) + "\n");
     log(`wrote ${p.hooks}  (unread-mail hook: ${events.join(", ")})`);
     written.push(p.hooks);
   }
+  warnForeign(log, foreign);
   log(
     "next (Cursor): open the repo in Cursor, go to Cursor Settings > Tools & MCP (older versions: MCP) and switch the 'bridge' server on;\n" +
       "  Cursor does not start a project server until you do. Start a new chat afterwards." +
@@ -137,13 +135,21 @@ export function writeConfig({ repoDir, name, env, withHook, hookForm, summary = 
         : "") +
       "\ntip: .cursor/mcp.json and .cursor/hooks.json now hold absolute paths for this machine; add them to .gitignore if you don't want to commit them."
   );
-  return written;
+  return own ? tx.commit() : written;
 }
 
+// { path, env }, null without a file; a file that can't be read or parsed gives an empty env and `error` (R4-05).
 export function readServerEnv(repoDir) {
   const path = paths(repoDir).mcp;
-  if (!existsSync(path)) return null;
-  return { path, env: readJson(path).mcpServers?.[SERVER_NAME]?.env ?? {} };
+  try {
+    const t = readText(path);
+    if (t == null) return null;
+    const doc = JSON.parse(t);
+    const env = isObject(doc) && isObject(doc.mcpServers) && isObject(doc.mcpServers[SERVER_NAME]?.env) ? doc.mcpServers[SERVER_NAME].env : {};
+    return { path, env: Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === "string")) };
+  } catch (e) {
+    return { path, env: {}, error: e.message.split("\n")[0] };
+  }
 }
 
 // The description an earlier init stored, so re-running init without one keeps it.
@@ -262,8 +268,10 @@ export function hasNativeHook(workspaceDir, name, event) {
   try {
     if (!workspaceDir || !name || !event) return false;
     const file = join(workspaceDir, ".cursor", "hooks.json");
-    if (lstatSync(file).size > 1024 * 1024) return false;
-    const list = JSON.parse(readFileSync(file, "utf8"))?.hooks?.[event];
+    // readText: no symlink, no FIFO or device, at most 1 MiB, checked on the open file (R4-06)
+    const t = readText(file);
+    if (t == null) return false;
+    const list = JSON.parse(t)?.hooks?.[event];
     const ours = ourPeekHook(name);
     return Array.isArray(list) && list.some((x) => ours.test(hookText(x)) && /--format["']?\s+["']?cursor/.test(hookText(x)));
   } catch {

@@ -1,9 +1,11 @@
 // OpenAI Codex CLI: .codex/config.toml ([mcp_servers.bridge]) and .codex/hooks.json (UserPromptSubmit hook).
 // What Codex does with these files, from its source and the real binary: docs/clients/codex.md.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SERVER_JS, SERVER_NAME, hookText, peekHook, readJson, refuseSymlink, shq } from "./common.js";
+import {
+  FileTx, SERVER_JS, SERVER_NAME, foreignHooks, foreignServers, hookText, isObject, peekHook, psq, readText, refuseSymlink, shq,
+  warnForeign,
+} from "./common.js";
 import { canon, parse, replaceTable, sameOutside, tomlArray, tomlInlineTable, tomlString } from "./toml-edit.js";
 
 export const label = "Codex";
@@ -12,16 +14,18 @@ export const label = "Codex";
 // 300), so the entry sets 660: the longest wait plus a minute for the store round trip.
 export const TOOL_TIMEOUT_SEC = 660;
 
-// Keys of [mcp_servers.bridge] that init owns and rewrites every time. Any other key in the entry
-// (Codex itself stores "always allow" answers as [mcp_servers.bridge.tools.<tool>] approval_mode,
-// and users add startup_timeout_sec, default_tools_approval_mode, ...) is left alone.
+// Keys of [mcp_servers.bridge] that init owns and rewrites every time. Any other key in the entry (users
+// add startup_timeout_sec, enabled_tools, ...) is left alone. Approvals are not: a cloned repo could ship
+// default_tools_approval_mode = "approve" or [mcp_servers.bridge.tools.<tool>] approval_mode so that sending
+// messages never asks (R4-04). init drops them; Codex asks again and stores the user's own answers.
+const APPROVAL_KEYS = ["default_tools_approval_mode", "tools"];
 const OWNED_KEYS = new Set([
-  "command", "args", "env", "cwd", "tool_timeout_sec",
+  "command", "args", "env", "cwd", "tool_timeout_sec", ...APPROVAL_KEYS,
   // another transport's keys: Codex rejects them next to `command`
   "url", "bearer_token", "bearer_token_env_var", "http_headers", "env_http_headers", "http_headers_helper",
   "oauth", "oauth_resource", "auth",
 ]);
-const OWNED_SUBTABLES = new Set(["env", "http_headers", "env_http_headers", "oauth"]);
+const OWNED_SUBTABLES = new Set(["env", "http_headers", "env_http_headers", "oauth", "tools"]);
 const TABLE = ["mcp_servers", SERVER_NAME];
 
 // A secret must never be written into a repo file: the env carries token *file* paths only.
@@ -42,15 +46,6 @@ const EVENTS = new Set(["UserPromptSubmit", "SessionStart"]);
 const noControl = (t) => {
   if (/[\u0000-\u001f\u007f]/.test(t)) throw new Error(`hook command: refusing a value with a control character: ${JSON.stringify(t)}`);
   return t;
-};
-
-// PowerShell single-quoted string: ' is doubled, and so are the typographic single quotes
-// PowerShell also treats as quotes. A double quote would be mangled by Windows PowerShell 5.1 when it
-// starts the program, so it is refused.
-const psq = (t) => {
-  noControl(t);
-  if (t.includes('"')) throw new Error(`hook command: a double quote in ${JSON.stringify(t)} cannot be quoted safely for PowerShell`);
-  return `'${t.replace(/['\u2018\u2019\u201a\u201b]/g, (c) => c + c)}'`;
 };
 
 // cmd.exe: inside "..." only " and %...% are special. Neither can be escaped reliably, so they are refused.
@@ -108,7 +103,13 @@ export function editConfigToml(existing, { repoDir, env, _replace = replaceTable
     `cwd = ${tomlString(entry.cwd)}`,
     `tool_timeout_sec = ${entry.tool_timeout_sec}`,
   ];
-  const edited = _replace(text, TABLE, { owned: OWNED_KEYS, ownedSubtables: OWNED_SUBTABLES, lines });
+  let edited;
+  try {
+    edited = _replace(text, TABLE, { owned: OWNED_KEYS, ownedSubtables: OWNED_SUBTABLES, lines });
+  } catch (e) {
+    // a deliberate refusal from the editor, or a pathological file (e.g. 100,000 dotted keys: RangeError; R4-08)
+    throw new Error(`can't edit .codex/config.toml (${String(e.message).split("\n")[0]}); fix or move it, then run init again.`);
+  }
 
   // The parser is the referee: the result must parse, our entry must read back exactly as intended,
   // and nothing outside the entry may have changed (no injected key, nothing lost).
@@ -161,7 +162,9 @@ export function mergeHooks(hooks, { name, handler }) {
   return hooks;
 }
 
-export function writeConfig({ repoDir, name, env, withHook, hookForm, summary = "", notes = [], log = console.log, platform = process.platform }) {
+export function writeConfig({ repoDir, name, env, withHook, hookForm, summary = "", notes = [], log = console.log, platform = process.platform, tx }) {
+  const own = !tx;
+  tx ??= new FileTx();
   const dir = join(repoDir, ".codex");
   const cfgPath = join(dir, "config.toml");
   const hooksPath = join(dir, "hooks.json");
@@ -171,7 +174,19 @@ export function writeConfig({ repoDir, name, env, withHook, hookForm, summary = 
 
   // Everything that can fail (parsing, quoting) happens before the first write, so a refusal
   // leaves both files as they were.
-  const cfg = editConfigToml(existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "", { repoDir, env });
+  let cfgText;
+  try {
+    cfgText = readText(cfgPath) ?? ""; // a regular file of at most 1 MiB (R4-08)
+  } catch (e) {
+    throw new Error(`can't read the existing .codex/config.toml (${e.message.split("\n")[0]}); fix or move it, then run init again.`);
+  }
+  const cfg = editConfigToml(cfgText, { repoDir, env });
+  let before = {};
+  try {
+    before = parse(stripBom(cfgText)[0]);
+  } catch {}
+  const dropped = APPROVAL_KEYS.filter((k) => before.mcp_servers?.[SERVER_NAME]?.[k] !== undefined);
+  const foreign = foreignServers(before.mcp_servers, ".codex/config.toml");
   let hooksJson = null;
   if (withHook) {
     // Exec-form peek (--set KEY=VALUE arguments: only bridge settings are accepted, nothing is expanded),
@@ -181,33 +196,40 @@ export function writeConfig({ repoDir, name, env, withHook, hookForm, summary = 
     const handler = { type: "command", command, timeout: HOOK_TIMEOUT_SEC, statusMessage: STATUS_MESSAGE };
     let existing;
     try {
-      existing = readJson(hooksPath);
+      const t = readText(hooksPath);
+      existing = t == null ? {} : JSON.parse(t);
     } catch (e) {
       throw new Error(`can't parse the existing .codex/hooks.json (${e.message.split("\n")[0]}); fix or move it, then run init again.`);
     }
     hooksJson = JSON.stringify(mergeHooks(existing, { name, handler }), null, 2) + "\n";
+    foreign.push(...foreignHooks(existing.hooks, ".codex/hooks.json", (h) => ourCodexHook(name).test(hookText(h))));
   }
 
-  mkdirSync(dir, { recursive: true });
   // New files are private to the user: the entry can carry a proxy URL with credentials.
-  writeFileSync(cfgPath, cfg, { mode: 0o600 });
+  tx.write(cfgPath, cfg, { mode: 0o600 });
   const written = [cfgPath];
   log(`wrote ${cfgPath}  (agent "${name}"${summary ? ", " + summary : ""})`);
   for (const n of notes) log(n);
 
   if (hooksJson !== null) {
-    writeFileSync(hooksPath, hooksJson, { mode: 0o600 });
+    tx.write(hooksPath, hooksJson, { mode: 0o600 });
     log(`wrote ${hooksPath}  (unread-mail hook)`);
     written.push(hooksPath);
   }
+  if (dropped.length) log(`note: removed ${dropped.join(", ")} from [mcp_servers.bridge]: Codex will ask you again before the bridge sends a message.`);
+  warnForeign(log, foreign);
   log(
-    "next (Codex): start Codex in that repo. It loads .codex/ only for a trusted project, so answer 'trust' when it asks about the folder\n" +
-      "  (or add it under [projects] with trust_level = \"trusted\" in ~/.codex/config.toml)." +
-      (withHook ? "\n  Then choose 'Trust all and continue' at the 'Hooks need review' prompt (or review it with /hooks); until then the unread-mail hook does not run." : "") +
-      "\n  The first call of each bridge tool asks for approval; 'always allow' is stored in .codex/config.toml.\n" +
+    "next (Codex): start Codex in that repo. It loads .codex/ only for a trusted project; trusting the folder also trusts\n" +
+      "  everything else in its .codex/ (read it first), or add it under [projects] with trust_level = \"trusted\" in ~/.codex/config.toml." +
+      (withHook
+        ? "\n  At the 'Hooks need review' prompt (or /hooks), trust the agent-bridge hook (its command runs cli.js peek " + name + ");\n" +
+          "  trust any other hook only if you know what it does. Until you trust it, the unread-mail hook does not run."
+        : "") +
+      "\n  Approvals: send_message asks before each send unless you choose 'always allow'; the other bridge tools only read\n" +
+      "  your mailbox (or mark your messages read) and run without asking.\n" +
       "tip: .codex/config.toml now holds absolute paths for this machine; add .codex/ to .gitignore if you don't want to commit it."
   );
-  return written;
+  return own ? tx.commit() : written;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -228,9 +250,10 @@ export function peekOutput(notes, { event } = {}) {
 // for an earlier description, and a broken Codex file must not stop `init --client claude`.
 export function readServerEnv(repoDir) {
   const path = join(repoDir, ".codex", "config.toml");
-  if (!existsSync(path)) return null;
   try {
-    const raw = parse(stripBom(readFileSync(path, "utf8"))[0]).mcp_servers?.[SERVER_NAME]?.env;
+    const t = readText(path); // at most 1 MiB: the TOML parser is quadratic on huge files (R4-08)
+    if (t == null) return null;
+    const raw = parse(stripBom(t)[0]).mcp_servers?.[SERVER_NAME]?.env;
     const env = {};
     if (raw && typeof raw === "object") for (const [k, v] of Object.entries(raw)) if (typeof v === "string") env[k] = v;
     return { path, env };

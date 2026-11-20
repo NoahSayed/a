@@ -103,8 +103,10 @@ Everything above writes an explicit `AGENT_NAME`. For a machine-wide setup where
 
 `${workspaceFolder}` (and `${env:NAME}`) interpolation in `mcp.json` is *reported* in Cursor's docs; the interpolation code in the
 SDK handles `${env:NAME}` and `${NAME:-default}` only and has no `workspaceFolder`, so verify it on your Cursor version. Without
-`AGENT_BRIDGE_PROJECT_DIR` the server falls back to `CLAUDE_PROJECT_DIR`, then **`CURSOR_PROJECT_DIR`** (new; Cursor sets both for
-hooks, *verified*; whether the IDE sets either for MCP servers is unverified), then the working directory.
+`AGENT_BRIDGE_PROJECT_DIR` the server falls back to `CLAUDE_PROJECT_DIR`, then the working directory. An inherited
+`CURSOR_PROJECT_DIR` is **not** used (round 4, R4-11): every process started from a Cursor terminal has it, and it would hand
+that process another project's name and token file. When `peek` runs as a Cursor hook it takes the project folder from the
+absolute workspace folder in Cursor's hook input instead.
 
 ## Limits
 

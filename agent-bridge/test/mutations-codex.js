@@ -46,10 +46,10 @@ export default [
   } catch (e) {`, replace: `    before = {};
   } catch (e) {`, suite: SUITE },
   { name: "CX config.toml is written before hooks.json is validated", file: CODEX,
-    find: `const cfg = editConfigToml(existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "", { repoDir, env });`,
-    replace: `const cfg = editConfigToml(existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "", { repoDir, env });
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(cfgPath, cfg);`, suite: SUITE },
+    find: `  const cfg = editConfigToml(cfgText, { repoDir, env });`,
+    replace: `  const cfg = editConfigToml(cfgText, { repoDir, env });
+  tx.write(cfgPath, cfg, { mode: 0o600 });
+  tx.commit();`, suite: SUITE },
   { name: "CX a hooks.json that is not an object is replaced", file: CODEX,
     find: `if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) throw`, replace: `if (false) throw`, suite: SUITE },
   { name: "CX a UserPromptSubmit that is not a list is replaced", file: CODEX,
@@ -61,7 +61,7 @@ export default [
   { name: "CX the user's sub-tables of the bridge entry (Codex's saved approvals) are dropped", file: TOML,
     find: `else if (ownedSubtables.has(it.path[tablePath.length]))`, replace: `else if (true)`, suite: SUITE },
   { name: "CX the old env sub-table is kept next to the new env", file: CODEX,
-    find: `const OWNED_SUBTABLES = new Set(["env", "http_headers", "env_http_headers", "oauth"]);`, replace: `const OWNED_SUBTABLES = new Set([]);`, suite: SUITE },
+    find: `const OWNED_SUBTABLES = new Set(["env", "http_headers", "env_http_headers", "oauth", "tools"]);`, replace: `const OWNED_SUBTABLES = new Set(["tools"]);`, suite: SUITE },
   { name: "CX tool_timeout_sec is not replaced on re-run", file: CODEX,
     find: `"command", "args", "env", "cwd", "tool_timeout_sec",`, replace: `"command", "args", "env", "cwd",`, suite: SUITE },
   { name: "CX another transport's url survives next to command", file: CODEX,
@@ -110,9 +110,9 @@ export default [
   { name: "CX hooks.json symlink not refused", file: CODEX,
     find: `  if (withHook) refuseSymlink(hooksPath);\n`, replace: ``, suite: SUITE },
   { name: "CX new config.toml is world-readable", file: CODEX,
-    find: `writeFileSync(cfgPath, cfg, { mode: 0o600 });`, replace: `writeFileSync(cfgPath, cfg);`, suite: SUITE },
+    find: `  tx.write(cfgPath, cfg, { mode: 0o600 });`, replace: `  tx.write(cfgPath, cfg, { mode: 0o644 });`, suite: SUITE },
   { name: "CX new hooks.json is world-readable", file: CODEX,
-    find: `writeFileSync(hooksPath, hooksJson, { mode: 0o600 });`, replace: `writeFileSync(hooksPath, hooksJson);`, suite: SUITE },
+    find: `    tx.write(hooksPath, hooksJson, { mode: 0o600 });`, replace: `    tx.write(hooksPath, hooksJson, { mode: 0o644 });`, suite: SUITE },
 
   // ---- what Codex needs from the entry
   { name: "CX tool_timeout_sec is Codex's 300 s default (a 600 s wait_for_message is cut off)", file: CODEX,
@@ -149,10 +149,10 @@ export default [
     find: `return tokens.map((t) => shq(noControl(t))).join(" ");`, replace: `return tokens.map((t) => noControl(t)).join(" ");`, suite: SUITE },
   { name: "CX control characters are allowed in the hook command", file: CODEX,
     find: `if (/[\\u0000-\\u001f\\u007f]/.test(t)) throw`, replace: `if (false) throw`, suite: SUITE },
-  { name: "CX PowerShell: single quotes not doubled", file: CODEX,
+  { name: "CX PowerShell: single quotes not doubled", file: "clients/common.js",
     find: `(c) => c + c)}'\`;`, replace: `(c) => c)}'\`;`, suite: SUITE },
-  { name: "CX PowerShell: double quotes accepted", file: CODEX,
-    find: `if (t.includes('"')) throw new Error(`, replace: `if (false) throw new Error(`, suite: SUITE },
+  { name: "CX PowerShell: double quotes accepted", file: "clients/common.js",
+    find: `  if (t.includes('"')) throw new Error(`, replace: `if (false) throw new Error(`, suite: SUITE },
   { name: "CX PowerShell: no call operator", file: CODEX,
     find: `return "& " + tokens.map(psq).join(" ");`, replace: `return tokens.map(psq).join(" ");`, suite: SUITE },
   { name: "CX cmd.exe: double quote, % and trailing backslash accepted", file: CODEX,

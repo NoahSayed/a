@@ -132,7 +132,11 @@ try {
     assert.equal(res.code, 0, res.err);
     assert.match(res.out, /wrote .*hooks\.json  \(unread-mail hook\)/);
     assert.match(res.out, /Hooks need review/);
-    assert.match(res.out, /Trust all and continue/);
+    // R4-04: never "Trust all": the user is told to trust the agent-bridge hook and to read anything else
+    assert.doesNotMatch(res.out, /Trust all/);
+    assert.match(res.out, /trust the agent-bridge hook \(its command runs cli\.js peek alpha\)/);
+    // R4-10: what Codex really asks for, given the tool annotations
+    assert.match(res.out, /send_message asks before each send/);
   });
 
   posixTest("new files are readable by the owner only (the entry can hold a proxy URL with credentials)", async () => {
@@ -190,7 +194,7 @@ notifications = true
     assert.equal(res.code, 0, res.err);
     const after = read(cfgPath(r));
     // every line the user wrote outside the bridge entry is still there, in order, unchanged
-    const kept = USER_CONFIG.split("\n").filter((l) => !/^(# an old entry|command = "node"|  "\/old|\]$|args = \[$|url = |AGENT_NAME = "stale"|OLD_SETTING|\[mcp_servers\.bridge\.env\]$)/.test(l));
+    const kept = USER_CONFIG.split("\n").filter((l) => !/^(# an old entry|command = "node"|  "\/old|\]$|args = \[$|url = |AGENT_NAME = "stale"|OLD_SETTING|\[mcp_servers\.bridge\.env\]$|default_tools_approval_mode|\[mcp_servers\.bridge\.tools\.whoami\]$|approval_mode = "approve"$)/.test(l));
     let pos = 0;
     for (const line of kept) {
       const at = after.indexOf(line, pos);
@@ -212,8 +216,10 @@ notifications = true
     assert.ok(!("OLD_SETTING" in b.env), "the old env table survived");
     assert.ok(!("url" in b), "another transport's key survived next to command");
     assert.equal(b.startup_timeout_sec, 45, "the user's own key in the entry was dropped");
-    assert.equal(b.default_tools_approval_mode, "prompt");
-    assert.deepEqual(b.tools, { whoami: { approval_mode: "approve" } }, "an 'always allow' answer Codex stored was dropped");
+    // R4-04: approvals in the bridge entry are dropped (a cloned repo could pre-approve sending), and init says so
+    assert.ok(!("default_tools_approval_mode" in b), "a pre-set approval mode survived");
+    assert.ok(!("tools" in b), "a pre-set per-tool approval survived");
+    assert.match(res.out, /removed default_tools_approval_mode, tools from \[mcp_servers\.bridge\]/);
     assert.equal(after.split("[mcp_servers.bridge]").length, 2, "the entry is duplicated");
   });
 
@@ -255,7 +261,7 @@ notifications = true
     assert.equal((await init(a, "alpha")).code, 0);
     assert.equal(bridgeOf(a).env.AGENT_NAME, "alpha");
     assert.ok(!("A" in bridgeOf(a).env));
-    assert.equal(bridgeOf(a).tools.send_message.approval_mode, "approve");
+    assert.ok(!("tools" in bridgeOf(a)), "a pre-set approval for send_message survived (R4-04)");
     const e = repo("header-at-eof");
     mkdirSync(join(e, ".codex"));
     writeFileSync(cfgPath(e), "x = 1\n[mcp_servers.bridge]");
@@ -358,7 +364,7 @@ notifications = true
       const c = cfgOf(r);
       assert.deepEqual(Object.keys(c).sort(), ["mcp_servers", "tui"], `#${i}: top-level keys: ${Object.keys(c)}`);
       assert.deepEqual(Object.keys(c.mcp_servers), ["bridge"], `#${i}: servers: ${Object.keys(c.mcp_servers)}`);
-      assert.deepEqual(Object.keys(c.mcp_servers.bridge).sort(), ["args", "command", "cwd", "env", "tool_timeout_sec", "tools"], `#${i}`);
+      assert.deepEqual(Object.keys(c.mcp_servers.bridge).sort(), ["args", "command", "cwd", "env", "tool_timeout_sec"], `#${i}`);
       assert.deepEqual(Object.keys(c.mcp_servers.bridge.env).sort(), ["AGENT_BRIDGE_DB", "AGENT_DESCRIPTION", "AGENT_NAME"], `#${i}`);
       assert.equal(c.mcp_servers.bridge.env.AGENT_DESCRIPTION, desc, `#${i}: description changed`);
       assert.equal(c.mcp_servers.bridge.cwd, r, `#${i}: cwd was overridden`);

@@ -2,9 +2,9 @@
 // agent when and how to use the bridge. Claude Code, Cursor and Codex all read SKILL.md skills, each from
 // its own folder in the repo. init copies it there (unless --no-skill).
 
-import { copyFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { HERE, refuseSymlink } from "./common.js";
+import { HERE, readText, refuseSymlink } from "./common.js";
 
 export const SKILL_SRC = join(HERE, "skills", "agent-bridge", "SKILL.md");
 
@@ -15,9 +15,11 @@ export const SKILL_DIRS = {
   codex: [".agents", "skills"],
 };
 
-// Copy SKILL.md into <repo>/<client skills dir>/agent-bridge/. Returns the path written, or null if the
-// file there is already identical. Never writes through a symlink at any level we create.
-export function installSkill(repoDir, client) {
+// Plan SKILL.md into <repo>/<client skills dir>/agent-bridge/ (written when `tx` commits). Returns
+// { path, backup } or null if the file there is already identical. A SKILL.md there that differs from ours (a
+// team's own edits, or an older version of ours) is kept as SKILL.md.bak, never silently lost (R4-07).
+// Never writes through a symlink at any level.
+export function installSkill(repoDir, client, tx) {
   const parts = SKILL_DIRS[client];
   if (!parts) throw new Error(`no skill folder known for client "${client}"`);
   const dirs = [];
@@ -27,9 +29,12 @@ export function installSkill(repoDir, client) {
     dirs.push(d);
   }
   const dest = join(d, "SKILL.md");
-  for (const p of [...dirs, dest]) refuseSymlink(p);
-  if (existsSync(dest) && readFileSync(dest, "utf8") === readFileSync(SKILL_SRC, "utf8")) return null;
-  mkdirSync(d, { recursive: true });
-  copyFileSync(SKILL_SRC, dest);
-  return dest;
+  const bak = join(d, "SKILL.md.bak");
+  for (const p of [...dirs, dest, bak]) refuseSymlink(p);
+  const ours = readFileSync(SKILL_SRC, "utf8");
+  const current = readText(dest);
+  if (current === ours) return null;
+  if (current != null) tx.write(bak, current, { mode: 0o644 });
+  tx.write(dest, ours, { mode: 0o644 });
+  return { path: dest, backup: current != null ? bak : null };
 }
