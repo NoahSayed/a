@@ -103,12 +103,8 @@ export default [
   { name: "CX the secret-name check also refuses token file paths", file: CODEX,
     find: `const SECRETISH = /(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$/i;`,
     replace: `const SECRETISH = /(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)(_FILE)?$/i;`, suite: SUITE },
-  { name: "CX .codex symlink not refused", file: CODEX,
-    find: `  refuseSymlink(dir);\n`, replace: ``, suite: SUITE },
-  { name: "CX config.toml symlink not refused", file: CODEX,
-    find: `  refuseSymlink(cfgPath);\n`, replace: ``, suite: SUITE },
-  { name: "CX hooks.json symlink not refused", file: CODEX,
-    find: `  if (withHook) refuseSymlink(hooksPath);\n`, replace: ``, suite: SUITE },
+  // The writer's own refuseSymlink calls are a second layer: FileTx.commit() refuses a symlinked file
+  // or directory for every file it writes (mutated in mutations-cursor.js), so removing one is not observable.
   { name: "CX new config.toml is world-readable", file: CODEX,
     find: `  tx.write(cfgPath, cfg, { mode: 0o600 });`, replace: `  tx.write(cfgPath, cfg, { mode: 0o644 });`, suite: SUITE },
   { name: "CX new hooks.json is world-readable", file: CODEX,

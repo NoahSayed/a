@@ -254,6 +254,15 @@ notifications = true
     assert.equal(c.mcp_servers.bridge.env.AGENT_NAME, "alpha");
   });
 
+  await test("a sub-table of the bridge entry that agent-bridge doesn't know is kept, like an unknown key", async () => {
+    const r = repo("unknown-sub");
+    mkdirSync(join(r, ".codex"));
+    writeFileSync(cfgPath(r), '[mcp_servers.bridge]\ncommand = "node"\n\n[mcp_servers.bridge.future_setting]\nowner = "platform"\n');
+    assert.equal((await init(r, "alpha")).code, 0);
+    assert.equal(bridgeOf(r).env.AGENT_NAME, "alpha");
+    assert.deepEqual(bridgeOf(r).future_setting, { owner: "platform" });
+  });
+
   await test("an entry that exists only as sub-tables, or the file ending in our header, is handled", async () => {
     const a = repo("only-sub");
     mkdirSync(join(a, ".codex"));

@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IS_WIN, connectAgent, rmrf, runCli, skip, summary, test } from "./harness.js";
+import { IS_WIN, connectAgent, homeEnv, rmrf, runCli, skip, summary, test } from "./harness.js";
 import { sqliteBackend } from "./backends.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "agent-bridge-r4-"));
@@ -17,7 +17,7 @@ const repo = (label = "r") => {
   mkdirSync(d, { recursive: true });
   return d;
 };
-const env = { HOME, AGENT_BRIDGE_DB: join(tmp, "bridge.db") };
+const env = { ...homeEnv(HOME), AGENT_BRIDGE_DB: join(tmp, "bridge.db") };
 const listFiles = (d) => {
   const out = [];
   const walk = (p, rel) => {
@@ -64,7 +64,7 @@ try {
     const created = join(tmp, "a", "b", ".bashrc");
     for (const target of [victim, created]) {
       writeFileSync(join(r, ".mcp.json"), JSON.stringify({ mcpServers: { bridge: { command: "node", env: { AGENT_NAME: "web", AGENT_BRIDGE_DB: target } } } }));
-      const out = await runCli(["doctor", r], { HOME });
+      const out = await runCli(["doctor", r], homeEnv(HOME));
       assert.doesNotMatch(out.out, /Mailbox open and writable/);
       if (target === victim) assert.match(out.out, /skipped: .* outside ~\/\.agent-bridge/);
     }
@@ -76,7 +76,7 @@ try {
     const r = repo();
     const db = join(HOME, ".agent-bridge", "bridge.db");
     writeFileSync(join(r, ".mcp.json"), JSON.stringify({ mcpServers: { bridge: { command: "node", env: { AGENT_NAME: "web", AGENT_BRIDGE_DB: db } } } }));
-    const out = await runCli(["doctor", r], { HOME });
+    const out = await runCli(["doctor", r], homeEnv(HOME));
     assert.match(out.out, /OK +Mailbox open and writable/);
   });
 

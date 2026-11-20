@@ -305,7 +305,9 @@ try {
 
   await test("hostile settings values (mailbox path with quotes and $()) are quoted in the hook command: nothing is executed", async () => {
     const r = repo("h-path");
-    const dir = join(tmp, `it's $(touch ${join(tmp, "PWNED-path")}) \`touch ${join(tmp, "PWNED-path2")}\``);
+    // on Windows a backslash inside a folder name is a separator, so the touch targets are bare names there
+    const target = (n) => (IS_WIN ? n : join(tmp, n));
+    const dir = join(tmp, `it's $(touch ${target("PWNED-path")}) \`touch ${target("PWNED-path2")}\``);
     mkdirSync(dir, { recursive: true });
     const env = { HOME, AGENT_BRIDGE_DB: join(dir, "bridge.db") };
     for (const form of IS_WIN ? ["exec"] : ["shell", "exec"]) {

@@ -6,9 +6,11 @@ const F = "clients/cursor.js";
 
 export default [
   // --- files: symlinks, merging, shape
-  { name: "CU .cursor directory symlink not refused", file: F, find: `  refuseSymlink(p.dir);\n`, replace: ``, suite: CC },
-  { name: "CU mcp.json symlink not refused", file: F, find: `  refuseSymlink(p.mcp);\n`, replace: ``, suite: CC },
-  { name: "CU hooks.json symlink not refused", file: F, find: `  if (withHook) refuseSymlink(p.hooks);`, replace: ``, suite: CC },
+  // Symlinks and a bad --cursor-events: the writer's own checks are second layers. FileTx.commit() refuses
+  // a symlinked file or directory, and nothing is written until every tool's files are planned, so a
+  // late failure writes nothing (mutated as R4-01). These mutate the shared symlink layer instead.
+  { name: "CU FileTx writes through a symlinked file", file: "clients/common.js", find: `    for (const f of this.files) refuseSymlink(f.path);\n`, replace: ``, suite: CC },
+  { name: "CU FileTx writes through a symlinked directory", file: "clients/common.js", find: `      refuseSymlink(dirname(f.path));\n`, replace: ``, suite: CC },
   { name: "CU the user's other MCP servers are dropped", file: F, find: `  mcp.mcpServers ??= {};`, replace: `  mcp.mcpServers = {};`, suite: CC },
   { name: "CU hooks.json `version` not preserved", file: F, find: `  doc.version ??= 1;`, replace: `  doc.version = 1;`, suite: CC },
   { name: "CU the user's other hooks are dropped", file: F, find: `      list = [...(list ?? []), entry];`, replace: `      list = [entry];`, suite: CC },
@@ -54,7 +56,6 @@ export default [
   { name: "CU the proxy re-run gets no hook input", file: "cli.js", find: `            input: asCursor ? JSON.stringify(hookInput ?? {}) : undefined,`, replace: `            input: undefined,`, suite: CC },
   { name: "CU the proxy re-run's junk output reaches Cursor", file: "cli.js", find: `              ok = typeof child.stdout === "string" && child.stdout.trim() !== "" && JSON.parse(child.stdout) !== null;`, replace: `              ok = true;`, suite: CC },
   { name: "CU a dead proxy re-run leaves Cursor without an answer", file: "cli.js", find: `            else emit();\n          }\n          await flush();`, replace: `            else {}\n          }\n          await flush();`, suite: CC },
-  { name: "CU --cursor-events validated only after Claude's files are written", file: "cli.js", find: `clients.includes("cursor") ? cursorClient.parseEvents(flagValue("--cursor-events")) : undefined;`, replace: `flagValue("--cursor-events");`, suite: CC },
 
   // --- project folder as the agent's name
   { name: "CU an inherited CURSOR_PROJECT_DIR names the agent (R4-11)", file: "store.js", find: `    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);`, replace: `    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || env.CURSOR_PROJECT_DIR || cwd);`, suite: CC },
