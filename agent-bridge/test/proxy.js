@@ -245,7 +245,9 @@ try {
     const cmd = readJson(join(r, ".claude", "settings.local.json")).hooks.UserPromptSubmit.at(-1).hooks[0].command;
     assert.ok(cmd.includes(`NODE_USE_ENV_PROXY='1'`), cmd);
     assert.ok(cmd.includes(`NO_PROXY='localhost,.corp.example,10.0.0.0/8'`), cmd);
-    assert.ok(cmd.includes(`HTTPS_PROXY='http://alice:${SECRET_PW}@proxy.corp:8080'`), cmd);
+    // ... except a proxy URL with credentials: a process's command line is readable by every user (R3-05)
+    assert.ok(!cmd.includes(SECRET_PW) && !cmd.includes("alice"), cmd);
+    assert.ok(cmd.includes(`http_proxy='http://proxy.corp:3128'`), cmd);
     assert.ok(cmd.includes(`NODE_EXTRA_CA_CERTS='${ca}'`), cmd);
   });
 

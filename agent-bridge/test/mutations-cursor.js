@@ -58,5 +58,5 @@ export default [
   { name: "CU a dead proxy re-run leaves Cursor without an answer", file: "cli.js", find: `            else emit();\n          }\n          await flush();`, replace: `            else {}\n          }\n          await flush();`, suite: CC },
 
   // --- project folder as the agent's name
-  { name: "CU an inherited CURSOR_PROJECT_DIR names the agent (R4-11)", file: "store.js", find: `    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);`, replace: `    out.AGENT_NAME = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || env.CURSOR_PROJECT_DIR || cwd);`, suite: CC },
+  { name: "CU an inherited CURSOR_PROJECT_DIR names the agent (R4-11)", file: "store.js", find: `    const derived = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || cwd);`, replace: `    const derived = agentNameFromDir(env.AGENT_BRIDGE_PROJECT_DIR || env.CLAUDE_PROJECT_DIR || env.CURSOR_PROJECT_DIR || cwd);`, suite: CC },
 ];

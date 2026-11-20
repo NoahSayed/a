@@ -73,12 +73,45 @@ export function proxyWarning(status) {
   );
 }
 
-// Proxy URL with any credentials hidden, for display.
-export function maskProxyUrl(value) {
-  return String(value).replace(/\/\/([^/@\s]*)@/, (_, cred) => {
-    const user = cred.split(":")[0];
-    return `//${user}${cred.includes(":") ? ":***" : ""}@`;
-  });
-}
+const USERINFO = /^((?:[a-z][a-z0-9+.-]*:)?\/\/)?[^/?#]*@/i;
 
-export const proxyUrlHasCredentials = (value) => /\/\/[^/@\s]*:[^/@\s]*@/.test(String(value));
+// URL text with any userinfo hidden, for display (R3-05). Parsed the way Node does (WHATWG): userinfo ends at
+// the LAST "@" before the host, so a raw "@" in a password can't leave a tail behind. A password is shown as
+// "***"; a user name with no password is itself the credential (some gateways take a token there), so it is
+// hidden too. Text that doesn't parse as a URL with an authority gets everything up to the last "@" of its
+// authority replaced, so nothing is shown that could be a credential.
+export function maskUrlCredentials(value) {
+  const text = String(value);
+  let user = "***";
+  try {
+    const u = new URL(text);
+    if (u.host) {
+      if (!u.username && !u.password) return text;
+      if (u.password) user = `${u.username}:***`;
+    }
+  } catch {}
+  // the userinfo is everything in the authority up to its last "@"
+  return text.replace(USERINFO, (_, lead = "") => `${lead}${user}@`);
+}
+export const maskProxyUrl = maskUrlCredentials;
+
+// True when the URL carries userinfo of any kind: user:password, a user name alone (token-only), or a password alone.
+export function urlHasCredentials(value) {
+  const text = String(value);
+  try {
+    const u = new URL(text);
+    if (u.host) return Boolean(u.username || u.password);
+  } catch {}
+  return USERINFO.test(text);
+}
+export const proxyUrlHasCredentials = urlHasCredentials;
+
+// A service URL (SUPABASE_URL, RELAY_URL, SLACK_API_URL) must not carry credentials: they would be copied into config files
+// other users can read, and printed by tools (R3-07). Returns an error message, or null when the URL has no userinfo.
+export function urlCredentialsProblem(value, name) {
+  if (!urlHasCredentials(value)) return null;
+  return (
+    `${name} contains credentials (${maskUrlCredentials(value)}). A user name or password in a URL would be copied into config files ` +
+    `and shown by tools. Remove them from the URL; the agent's token goes in AGENT_BRIDGE_TOKEN_FILE, not in the address.`
+  );
+}

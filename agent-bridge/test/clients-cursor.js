@@ -708,12 +708,13 @@ sys.stdout.write(out.decode(errors="replace"))
     assert.equal(resolveIdentityEnv({ ...base, CURSOR_PROJECT_DIR: "/work/cur", CLAUDE_PROJECT_DIR: "/work/cla" }, "/x/cwd").AGENT_NAME, "cla");
     assert.equal(resolveIdentityEnv({ ...base, CURSOR_PROJECT_DIR: "/work/cur", AGENT_BRIDGE_PROJECT_DIR: "/work/own" }, "/x/cwd").AGENT_NAME, "own");
     assert.equal(resolveIdentityEnv(base, "/x/the-cwd").AGENT_NAME, "the-cwd");
-    assert.equal(resolveIdentityEnv({ ...base, AGENT_NAME: "explicit", CURSOR_PROJECT_DIR: "/work/cur" }, "/x").AGENT_NAME, "explicit");
+    assert.equal(resolveIdentityEnv({ ...base, AGENT_NAME: "x", CURSOR_PROJECT_DIR: "/work/cur" }, "/x").AGENT_NAME, "x");
     assert.equal(agentNameFromDir("/a/b/Proj_1"), "proj_1");
+    assert.throws(() => agentNameFromDir("/a/b/Proj 1"), /agent name/); // not cleaned up (R3-06)
   });
 
   await test("as a Cursor hook, peek names a project-named agent after the workspace folder Cursor sends (not an inherited variable)", async () => {
-    const folder = repo("Hook Proj");
+    const folder = repo("Hook-Proj");
     const db = join(tmp, "hookproj.db");
     const env = { HOME, AGENT_BRIDGE_DB: db };
     const sent = await runCli(["send", "hook-proj", "hello there"], { ...env, AGENT_NAME: "sender" });
@@ -722,7 +723,7 @@ sys.stdout.write(out.decode(errors="replace"))
     const named = await runCli(["peek", "--format", "cursor", "--event", "beforeSubmitPrompt"], { ...env, AGENT_BRIDGE_NAME_FROM: "project" }, { input: inp });
     assert.match(JSON.parse(named.out).additional_context ?? "", /1 from sender/);
     // a relative "workspace" is not used
-    const rel = JSON.stringify({ hook_event_name: "beforeSubmitPrompt", cursor_version: "3.0.0", workspace_roots: ["Hook Proj"] });
+    const rel = JSON.stringify({ hook_event_name: "beforeSubmitPrompt", cursor_version: "3.0.0", workspace_roots: ["Hook-Proj"] });
     const relOut = await runCli(["peek", "--format", "cursor", "--event", "beforeSubmitPrompt"], { ...env, AGENT_BRIDGE_NAME_FROM: "project" }, { input: rel });
     assert.ok(!/1 from sender/.test(relOut.out), relOut.out);
   });
@@ -732,7 +733,7 @@ sys.stdout.write(out.decode(errors="replace"))
     const { sqliteBackend } = await import("./backends.js");
     const b = await sqliteBackend();
     try {
-      const folder = repo("Cursor Proj");
+      const folder = repo("Cursor-Proj");
       const a = await connectAgent(b, "x", { AGENT_NAME: "", AGENT_BRIDGE_NAME_FROM: "project", AGENT_BRIDGE_PROJECT_DIR: folder });
       try {
         assert.equal(JSON.parse((await a.call("whoami")).text).agent, "cursor-proj");

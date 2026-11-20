@@ -8,7 +8,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dlpNotice } from "./stores/dlp.js";
 import { LINE_BREAK_RUN, LINE_BREAK_SPLIT } from "./stores/common.js";
-import { CA_VAR, maskProxyUrl, nodeSupportsEnvProxy, proxyEnvForConfig, proxyUrlHasCredentials } from "./proxy.js";
+import { CA_VAR, maskProxyUrl, nodeSupportsEnvProxy, proxyEnvForConfig, proxyUrlHasCredentials, urlCredentialsProblem } from "./proxy.js";
 import { AGENT_NAME_RE, backendFromEnv, createStore, expandHome, readSecret, resolveDbPath, resolveIdentityEnv } from "./store.js";
 import { CLIENTS, FileTx, PEEK_ENV_KEYS, PEEK_PROCESS_KEYS, PEEK_REEXEC_GUARD, isSecretSupabaseKey } from "./clients/common.js";
 import * as claudeClient from "./clients/claude.js";
@@ -82,6 +82,15 @@ const [cmd, ...args] = positional;
 // hook and must never fail loudly, so it ignores what it doesn't know.
 const unknownFlags = argv.filter((a, i) => a.startsWith("--") && !VALUE_FLAGS.has(a) && !BOOL_FLAGS.has(a) && !(i > 0 && VALUE_FLAGS.has(argv[i - 1])));
 
+// Refuse a service URL that carries a user name or password (R3-07); `what` names the variable.
+const refuseUrlCredentials = (url, what) => {
+  const problem = url ? urlCredentialsProblem(url, what) : null;
+  if (problem) throw new Error(problem);
+};
+// peek's second run gets the proxy / CA settings in its real environment (R2-12), so they are dropped from its
+// arguments: a proxy credential must not show in the command line of a process (R3-05).
+const withoutStartupSets = (args) =>
+  args.filter((a, i) => !(a === "--set" && PEEK_PROCESS_KEYS.has(String(args[i + 1]).split("=")[0])) && !(args[i - 1] === "--set" && PEEK_PROCESS_KEYS.has(String(a).split("=")[0])));
 // Let stdout/stderr drain before process.exit(), which can cut off piped output on some platforms.
 const flush = () => new Promise((r) => process.stdout.write("", () => process.stderr.write("", r)));
 
@@ -231,7 +240,7 @@ async function main() {
           // Run again, once, with the settings in the child's real environment (R2-12). The guard stops a loop.
           // Cursor wants JSON on stdout whatever happens: the child's answer is passed on only if it is JSON.
           const asCursor = format === "cursor";
-          const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...argv, ...(imported ? ["--format", "cursor", ...(event ? ["--event", event] : [])] : [])], {
+          const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...withoutStartupSets(argv), ...(imported ? ["--format", "cursor", ...(event ? ["--event", event] : [])] : [])], {
             env: { ...process.env, ...startup, [PEEK_REEXEC_GUARD]: "1" },
             input: asCursor ? JSON.stringify(hookInput ?? {}) : undefined,
             stdio: [asCursor ? "pipe" : "ignore", asCursor ? "pipe" : "inherit", "inherit"],
@@ -297,6 +306,7 @@ async function main() {
       if (slack) {
         const channel = process.env.SLACK_CHANNEL_ID;
         if (!channel) throw new Error("--slack needs SLACK_CHANNEL_ID (the bridge channel's ID, like C0123ABCDEF) in your shell.");
+        refuseUrlCredentials(process.env.SLACK_API_URL, "SLACK_API_URL");
         const tf = expandHome(flagValue("--token-file") || slackTokenPath(name));
         if (!existsSync(tf)) {
           throw new Error(`no Slack token file at ${tf}. Save this agent's bot token with "save-slack-token ${name}", then re-run init.`);
@@ -307,6 +317,7 @@ async function main() {
       } else if (relay) {
         const url = process.env.RELAY_URL;
         if (!url) throw new Error("--relay needs RELAY_URL (the relay's address, like https://bridge.internal:8787) in your shell.");
+        refuseUrlCredentials(url, "RELAY_URL");
         const tf = expandHome(flagValue("--token-file") || tokenPath(name));
         if (!existsSync(tf)) {
           throw new Error(
@@ -323,6 +334,7 @@ async function main() {
         const url = process.env.SUPABASE_URL;
         const key = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
         if (!url || !key) throw new Error("--supabase needs SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in your shell.");
+        refuseUrlCredentials(url, "SUPABASE_URL");
         const tf = expandHome(flagValue("--token-file") || tokenPath(name));
         if (!existsSync(tf)) {
           throw new Error(
@@ -368,7 +380,11 @@ async function main() {
             proxyNotes.push(`  WARNING: this Node (${process.versions.node}) is too old for NODE_USE_ENV_PROXY (needs 22.21+ or 24+); upgrade Node.`);
           }
           if (Object.entries(px).some(([k, v]) => /^(https?)_proxy$/i.test(k) && proxyUrlHasCredentials(v))) {
-            proxyNotes.push("  WARNING: a proxy URL contains credentials; they are now stored in plain text in the generated files. Keep them out of git.");
+            proxyNotes.push(
+              "  WARNING: a proxy URL contains credentials; they are now stored in plain text in the generated files. Keep them out of git.\n" +
+                "  The hook's command line does not carry them (any user can read a process's command line): the hook uses the\n" +
+                "  HTTPS_PROXY it inherits from the environment of the tool that runs it, so keep it exported there."
+            );
           }
         }
       }
@@ -557,10 +573,12 @@ async function main() {
         const key = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
         if (!process.env.SUPABASE_URL || !key) throw new Error("managed-config for Supabase needs SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.");
         if (isSecretSupabaseKey(key)) throw new Error("SUPABASE_PUBLISHABLE_KEY holds a secret key; use the publishable key.");
+        refuseUrlCredentials(process.env.SUPABASE_URL, "SUPABASE_URL");
         Object.assign(env, { AGENT_BRIDGE_BACKEND: "supabase", SUPABASE_URL: process.env.SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY: key });
         env.AGENT_BRIDGE_TOKEN_FILE = "~/.agent-bridge/tokens/{agent}.token";
       } else if (backend === "relay") {
         if (!process.env.RELAY_URL) throw new Error("managed-config for the relay needs RELAY_URL.");
+        refuseUrlCredentials(process.env.RELAY_URL, "RELAY_URL");
         Object.assign(env, { AGENT_BRIDGE_BACKEND: "relay", RELAY_URL: process.env.RELAY_URL });
         env.AGENT_BRIDGE_TOKEN_FILE = "~/.agent-bridge/tokens/{agent}.token";
         for (const k of ["RELAY_TLS_CA", "RELAY_TLS_CLIENT_CERT", "RELAY_TLS_CLIENT_KEY"]) {
@@ -568,6 +586,7 @@ async function main() {
         }
       } else if (backend === "slack") {
         if (!process.env.SLACK_CHANNEL_ID) throw new Error("managed-config for Slack needs SLACK_CHANNEL_ID.");
+        refuseUrlCredentials(process.env.SLACK_API_URL, "SLACK_API_URL");
         Object.assign(env, { AGENT_BRIDGE_BACKEND: "slack", SLACK_CHANNEL_ID: process.env.SLACK_CHANNEL_ID });
         env.SLACK_BOT_TOKEN_FILE = "~/.agent-bridge/tokens/{agent}.slack-token";
       }
@@ -594,7 +613,8 @@ async function main() {
           "  Windows: C:\\Program Files\\ClaudeCode\\managed-mcp.json",
           "If you use an allowlist in managed settings instead, allow exactly this command (env isn't compared):",
           `  ${JSON.stringify({ allowedMcpServers: [{ serverCommand: [command, server] }] })}`,
-          "Each project's agent is named after its folder (or AGENT_NAME / CLAUDE_PROJECT_DIR).",
+          "Each project's agent is named after its folder (CLAUDE_PROJECT_DIR if set): the folder name must already be an agent name\n" +
+            "(lowercase letters, digits, - and _, at most 40; capitals are lower-cased) or the server refuses to start. An AGENT_NAME that differs is refused too.",
           backend === "sqlite"
             ? "Local backend: all projects of a user share the mailbox above."
             : `Each user needs a token file per project: ${env.AGENT_BRIDGE_TOKEN_FILE || env.SLACK_BOT_TOKEN_FILE} ({agent} = the folder name), mode 0600.`,

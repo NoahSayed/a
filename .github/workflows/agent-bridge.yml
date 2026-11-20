@@ -83,6 +83,8 @@ jobs:
         run: node test/regressions-r3-dlp.js
       - name: Adversary round 3 regressions (relay limits, audit truthfulness, line breaks, relay DLP)
         run: node test/regressions-r3-relay.js
+      - name: Adversary round 3 regressions (proxy masking, managed names, URL userinfo, relay doctor, relay proxy)
+        run: node test/regressions-r3-config.js
       - name: DLP (secrets, card numbers, IBANs; block/redact/warn/off on every backend)
         run: node test/dlp.js
       - name: Corporate proxy and TLS inspection (forward proxy with its own CA)
@@ -145,6 +147,8 @@ jobs:
         run: node test/regressions-r3-dlp.js
       - name: Adversary round 3 regressions (relay limits, audit truthfulness, line breaks, relay DLP)
         run: node test/regressions-r3-relay.js
+      - name: Adversary round 3 regressions (proxy masking, managed names, URL userinfo, relay doctor, relay proxy)
+        run: node test/regressions-r3-config.js
       - name: Managed installs (Postgres part skipped)
         run: node test/managed.js
       - name: Coding-tool clients (--client, skill, Codex, Cursor)

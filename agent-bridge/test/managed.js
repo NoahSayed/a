@@ -70,15 +70,18 @@ try {
 
   await test("a server started from the entry takes its name from the project folder", async () => {
     const { entry } = await managedConfig({ AGENT_BRIDGE_DB: localDb });
-    assert.equal((await whoamiFrom(entry, project("Payments API!"))).agent, "payments-api");
+    assert.equal((await whoamiFrom(entry, project("Payments-API"))).agent, "payments-api"); // ASCII capitals only are lower-cased
     assert.equal((await whoamiFrom(entry, project("ledger"))).agent, "ledger");
+    // a folder name that is not already an agent name is refused, not cleaned up (R3-06)
+    await assert.rejects(() => whoamiFrom(entry, project("Payments API!")));
   });
 
-  await test("CLAUDE_PROJECT_DIR wins over the working directory; AGENT_NAME wins over both", async () => {
+  await test("CLAUDE_PROJECT_DIR wins over the working directory; an AGENT_NAME that is not the folder's name is refused (R3-06)", async () => {
     const { entry } = await managedConfig({ AGENT_BRIDGE_DB: localDb });
     const elsewhere = project("not-this-one");
     assert.equal((await whoamiFrom(entry, elsewhere, { CLAUDE_PROJECT_DIR: project("risk-engine") })).agent, "risk-engine");
-    assert.equal((await whoamiFrom(entry, elsewhere, { AGENT_NAME: "pinned" })).agent, "pinned");
+    await assert.rejects(() => whoamiFrom(entry, elsewhere, { AGENT_NAME: "pinned" }), "an inherited AGENT_NAME must not rename the agent");
+    assert.equal((await whoamiFrom(entry, elsewhere, { AGENT_NAME: "not-this-one" })).agent, "not-this-one");
   });
 
   await test("a folder name that can't become an agent name is a clear startup error", async () => {
