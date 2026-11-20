@@ -97,7 +97,7 @@ const server = new McpServer(
 
 server.registerTool(
   "whoami",
-  { description: "Show this agent's name on the bridge, the backend, and the unread count.", inputSchema: {} },
+  { description: "Show this agent's name on the bridge, the backend, and the unread count.", inputSchema: {}, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
   safe(async () => {
     const me = await store.whoami();
     const proxy = { configured: PROXY.configured, active: PROXY.active };
@@ -110,6 +110,8 @@ server.registerTool(
   {
     description: "List agents on the bridge (name, description, project dir, last seen).",
     inputSchema: {},
+    // Tool annotations: clients such as Codex skip the approval prompt for read-only tools.
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   safe(async () => text(JSON.stringify(await store.listAgents(), null, 2)))
 );
@@ -128,6 +130,8 @@ server.registerTool(
       subject: z.string().optional().describe("Short subject line, for new threads"),
       thread_id: z.string().optional().describe("Thread to reply in; omit to start a new thread"),
     },
+    // Sends to other agents (and, on Slack, a channel people read): not read-only, open-world.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   safe(async ({ to, body, type, subject, thread_id }) => {
     const known = (await store.listAgents()).some((a) => a.name === to);
@@ -158,6 +162,8 @@ server.registerTool(
       mark_read: z.boolean().default(true),
       from_agent: z.string().optional().describe("Only messages from this agent"),
     },
+    // Marks messages read, so not read-only; nothing is deleted.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   safe(async ({ limit, mark_read, from_agent }, extra) => {
     const claimed = await store.inbox({ limit, markRead: mark_read, fromAgent: from_agent ?? null });
@@ -187,6 +193,7 @@ server.registerTool(
       thread_id: z.string().optional().describe("Only wake for messages in this thread"),
       from_agent: z.string().optional().describe("Only wake for messages from this agent"),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   safe(async ({ timeout_seconds, thread_id, from_agent }, extra) => {
     const validThread = store.isThreadId ? store.isThreadId(thread_id) : isUuid(thread_id);
@@ -222,6 +229,7 @@ server.registerTool(
   {
     description: "Show the full history of a thread you are part of (both directions), oldest first.",
     inputSchema: { thread_id: z.string() },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   safe(async ({ thread_id }) => text((await store.thread(thread_id)).map(render).join("\n\n")))
 );

@@ -583,6 +583,7 @@ export async function envFromRepo(repoDir, base = process.env, { client } = {}) 
     } catch (e) {
       throw new BridgeError(`${p} could not be read: ${e.message}`);
     }
+    if (r?.error) throw new BridgeError(`${p} could not be read: ${r.error}`);
     if (!r || !r.env || !Object.keys(r.env).length) throw new BridgeError(`${p} has no "bridge" server; run "cli.js init --client ${found}" first.`);
     srvEnv = r.env;
   }

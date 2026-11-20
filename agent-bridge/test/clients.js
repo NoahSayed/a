@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IS_WIN, rmrf, runCli, skip, summary, test } from "./harness.js";
+import { IS_WIN, connectAgent, rmrf, runCli, skip, summary, test } from "./harness.js";
+import { sqliteBackend } from "./backends.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "agent-bridge-clients-"));
 const HOME = join(tmp, "home");
@@ -121,6 +122,35 @@ try {
     const missing = await runCli(["doctor", repo()], env);
     assert.notEqual(missing.code, 0);
     assert.match(missing.err, /no \.mcp\.json, \.cursor\/mcp\.json, \.codex\/config\.toml/);
+  });
+
+  await test("doctor <repo> reads .codex/config.toml (allowlist applied) and reports one that doesn't parse", async () => {
+    const r = repo();
+    const out = await runCli(["init", r, "front", "--client", "codex", "--no-skill"], env);
+    assert.equal(out.code, 0, out.err);
+    const ok = await runCli(["doctor", r, "--client", "codex"], env);
+    assert.match(ok.out, /\.codex[\\/]config\.toml/);
+    assert.match(ok.out, /front/);
+    writeFileSync(join(r, ".codex", "config.toml"), "[mcp_servers.bridge\ncommand = ");
+    const bad = await runCli(["doctor", r, "--client", "codex"], env);
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.err, /could not be read/);
+  });
+
+  await test("tool annotations: only whoami, list_agents and get_thread are read-only; nothing is destructive; send_message is open-world", async () => {
+    const b = await sqliteBackend();
+    const a = await connectAgent(b, "annot");
+    try {
+      const { tools } = await a.client.listTools();
+      const ann = Object.fromEntries(tools.map((t) => [t.name, t.annotations ?? {}]));
+      for (const t of ["whoami", "list_agents", "get_thread"]) assert.equal(ann[t].readOnlyHint, true, t);
+      for (const t of ["send_message", "check_inbox", "wait_for_message"]) assert.equal(ann[t].readOnlyHint, false, t);
+      for (const t of Object.keys(ann)) assert.equal(ann[t].destructiveHint, false, t);
+      assert.equal(ann.send_message.openWorldHint, true);
+    } finally {
+      await a.close();
+      await b.cleanup?.();
+    }
   });
 
   await test("peek --format with an unknown format prints nothing and exits 0 (never blocks a prompt)", async () => {
