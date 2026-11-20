@@ -88,9 +88,19 @@ export const npmAdapter = {
       const local = advs.find((x) => x.localFix);
       if (local) fix = { version: local.localFix.version, tarball: local.localFix.tarball ? path.resolve(dir, local.localFix.tarball) : null };
       else {
-        const vs = versionsOf(ctx, pkg).filter((v) => semver.valid(v) && !semver.prerelease(v) && semver.gt(v, installed));
-        const ok = vs.find((v) => advs.every((x) => !x.range || !semver.satisfies(v, x.range)));
-        if (ok) fix = { version: ok };
+        // Prefer staying on the installed major: the smallest same-major version that clears the most advisories
+        // (ideally all). Only if the same major line clears none, fall back to the smallest version that clears all.
+        const vs = versionsOf(ctx, pkg).filter((v) => semver.valid(v) && !semver.prerelease(v) && semver.gt(v, installed)).sort(semver.compare);
+        const cleared = (v) => advs.filter((x) => !x.range || !semver.satisfies(v, x.range)).length;
+        const same = vs.filter((v) => semver.major(v) === semver.major(installed));
+        let best = null;
+        for (const v of same) if (cleared(v) > (best ? cleared(best) : 0)) best = v;
+        const all = vs.find((v) => cleared(v) === advs.length);
+        if (best && (cleared(best) === advs.length || !all || semver.major(all) !== semver.major(installed))) {
+          fix = { version: best };
+          const left = advs.filter((x) => x.range && semver.satisfies(best, x.range)).map((x) => x.id);
+          if (left.length) { fix.residual = left; fix.majorOption = all || null; }
+        } else if (all) fix = { version: all };
       }
       if (fix) { fix.major = semver.major(fix.version) !== semver.major(installed); fix.ageDays = fix.tarball ? null : releaseAgeDays(ctx, pkg, fix.version); }
       const worst = advs.reduce((m, x) => ((x.cvss.score ?? 0) > (m.cvss.score ?? 0) ? x : m), advs[0]);

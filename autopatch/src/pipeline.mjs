@@ -95,10 +95,11 @@ export async function run({ cfg, adapter, mode = 'scan', approve = [], workDir, 
       f.gate = gate.checks.map(({ name, pass, known: kn, detail }) => ({ name, pass, known: kn, detail }));
       if (!gate.pass) { done(`NOT STAGED: gate failed (${gate.newFailures.map((c) => c.name).join('; ')}); still vulnerable, human alerted`, { status: 'failed' }); continue; }
       if (!actions.length) { done('NOT STAGED: nothing changed', { status: 'failed' }); continue; }
-      const needsHuman = f.sensitive?.humanApprovalRequired || (f.fix?.major && f.ai);
+      // Major upgrades always wait for a human, even when every check passes (the Next.js run once jumped 14 -> 15).
+      const needsHuman = f.sensitive?.humanApprovalRequired || f.fix?.major;
       const approved = approve.includes(f.id) || approve.includes(f.pkg);
       if (needsHuman && !approved) {
-        done(`STAGED, NEEDS HUMAN APPROVAL: ${[...(f.sensitive?.reasons || []), f.fix?.major && f.ai ? 'major upgrade with AI code changes' : null].filter(Boolean).join('; ')} (rerun with --approve ${f.id})`, { status: 'needs-approval', actions });
+        done(`STAGED, NEEDS HUMAN APPROVAL: ${[...(f.sensitive?.reasons || []), f.fix?.major ? `major upgrade ${f.installed} -> ${f.fix.version}${f.ai ? ' with AI code changes' : ''}` : null].filter(Boolean).join('; ')} (rerun with --approve ${f.id})`, { status: 'needs-approval', actions });
         continue; // not carried forward until approved
       }
       accepted.push(...actions);

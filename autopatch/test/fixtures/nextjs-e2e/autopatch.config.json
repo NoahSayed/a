@@ -1,0 +1,211 @@
+{
+  "adapter": "nextjs",
+  "ownedPaths": [
+    "app/**",
+    "lib/**",
+    "middleware.js",
+    "components/**"
+  ],
+  "ai": {
+    "enabled": true,
+    "model": "haiku"
+  },
+  "checks": {
+    "test": "npm test",
+    "restartCheck": true,
+    "pages": [
+      {
+        "path": "/",
+        "includes": [
+          "Fresh bread daily"
+        ]
+      },
+      {
+        "path": "/products",
+        "includes": [
+          "Sourdough Loaf"
+        ]
+      },
+      {
+        "path": "/login",
+        "includes": [
+          "Log in"
+        ]
+      }
+    ],
+    "flows": [
+      {
+        "name": "login valid (alice)",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "json": {
+          "username": "alice",
+          "password": "alice-pass-1"
+        },
+        "saveCookie": "alice",
+        "expect": {
+          "status": 200,
+          "includes": [
+            "\"ok\":true"
+          ]
+        }
+      },
+      {
+        "name": "login invalid (wrong password)",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "json": {
+          "username": "alice",
+          "password": "nope"
+        },
+        "expect": {
+          "status": 401
+        }
+      },
+      {
+        "name": "login valid (admin)",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "json": {
+          "username": "baker",
+          "password": "croissant-123"
+        },
+        "saveCookie": "baker",
+        "expect": {
+          "status": 200
+        }
+      },
+      {
+        "name": "admin denied anonymous",
+        "path": "/admin",
+        "expect": {
+          "status": [
+            302,
+            307,
+            401,
+            403
+          ],
+          "notIncludes": [
+            "Admin dashboard"
+          ]
+        }
+      },
+      {
+        "name": "admin denied bogus session",
+        "path": "/admin",
+        "headers": {
+          "cookie": "bakery_session=garbage"
+        },
+        "expect": {
+          "status": [
+            302,
+            307,
+            401,
+            403
+          ],
+          "notIncludes": [
+            "Admin dashboard"
+          ]
+        }
+      },
+      {
+        "name": "admin works logged in",
+        "path": "/admin",
+        "useCookie": "baker",
+        "expect": {
+          "status": 200,
+          "includes": [
+            "Admin dashboard"
+          ]
+        }
+      },
+      {
+        "name": "customer sees own orders",
+        "path": "/orders",
+        "useCookie": "alice",
+        "expect": {
+          "status": 200,
+          "includes": [
+            "Your orders"
+          ]
+        }
+      },
+      {
+        "name": "owner edits own order note",
+        "method": "PUT",
+        "path": "/api/orders/1/note",
+        "json": {
+          "text": "autopatch check note"
+        },
+        "useCookie": "alice",
+        "expect": {
+          "status": 200
+        }
+      },
+      {
+        "name": "owner reads edited note",
+        "path": "/api/orders/1/note",
+        "useCookie": "alice",
+        "expect": {
+          "status": 200,
+          "includes": [
+            "autopatch check note"
+          ]
+        }
+      },
+      {
+        "name": "session issued before restart",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "json": {
+          "username": "baker",
+          "password": "croissant-123"
+        },
+        "phase": "before-restart",
+        "saveCookie": "persisted",
+        "expect": {
+          "status": 200
+        }
+      },
+      {
+        "name": "session survives restart",
+        "phase": "after-restart",
+        "path": "/admin",
+        "useCookie": "persisted",
+        "expect": {
+          "status": 200,
+          "includes": [
+            "Admin dashboard"
+          ]
+        }
+      },
+      {
+        "name": "session survives restart (verify api)",
+        "phase": "after-restart",
+        "path": "/api/auth/verify",
+        "useCookie": "persisted",
+        "expect": {
+          "status": 200,
+          "includes": [
+            "admin"
+          ]
+        }
+      }
+    ],
+    "probes": [
+      {
+        "finding": "FICTIONAL-BAKERY-2024-0001",
+        "script": "autopatch-probes/order-notes.mjs"
+      }
+    ]
+  },
+  "feeds": {
+    "local": [
+      "../feeds/bakery-advisories.osv.json"
+    ]
+  },
+  "server": {
+    "port": 3200,
+    "readyPath": "/"
+  }
+}
