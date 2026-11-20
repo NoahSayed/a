@@ -82,13 +82,19 @@ own docs suggest for those).
 
 Every outgoing message, on every backend, is checked before it leaves (`AGENT_BRIDGE_DLP`, default `block`). The check
 finds:
-- private keys;
-- cloud and SaaS tokens (AWS, GitHub, Slack, Stripe, Google);
+- private keys (also JSON-escaped or cut short);
+- cloud and SaaS tokens (AWS, GitHub, GitLab, Slack, Stripe, Google, Azure, Anthropic, OpenAI, npm, SendGrid, Twilio);
 - JWTs;
 - this project's own tokens and keys;
-- `password = ...` style assignments;
-- **payment card numbers** (Luhn-valid and in a real issuer range);
-- **IBANs** (correct length for the country, mod-97 valid).
+- passwords: `password = ...` style assignments, `--password X` / `-pX` flags, `user:pass@` in connection URLs,
+  `Authorization: Bearer|Basic|Token` headers;
+- **payment card numbers** (Luhn-valid and in a real issuer range, any grouping);
+- **IBANs** (correct length for the country, mod-97 valid, any case or grouping).
+
+The subject and body are checked separately and together (a secret split across them is found). Zero-width characters,
+full-width digits and similar tricks are undone before checking. It is pattern-based, so it is a safety net, not a
+guarantee: a bare password with no label, or a vendor format it doesn't know, gets through. The list of known gaps is in
+[adversary/round-03-triage.md](adversary/round-03-triage.md).
 
 | Mode | Behavior |
 |---|---|
@@ -97,7 +103,8 @@ finds:
 | `warn` | The message is sent, and the agent is told what was found |
 | `off` | No checking |
 
-On the **relay** the same check also runs **server-side**, so a client that skips it can't get around it. On Supabase
+On the **relay** the same check also runs **server-side**, so a client that skips it can't get around it. The relay's
+mode is its own setting, `RELAY_DLP` (default `block`, shown in its startup line; a typo stops it from starting). On Supabase
 and Slack the check runs in agent-bridge's client. Someone calling those APIs directly with a stolen token isn't
 checked, which is one more reason the relay is the choice for PCI-scoped teams.
 
@@ -109,7 +116,7 @@ checked, which is one more reason the relay is the choice for PCI-scoped teams.
 | What does it install? | Two runtime dependencies (`@modelcontextprotocol/sdk`, `zod`), a lockfile, no native builds, no postinstall scripts |
 | Where are secrets kept? | In token files (0600 on POSIX; the user-profile ACL on Windows), referenced by path. Never in `.mcp.json` or the repository |
 | How is it tested? | Every suite runs in CI on Linux, macOS and Windows on Node 22 and 24. Two fresh-context attack rounds so far, each finding fixed with a regression test that failed first, and mutation testing on every guard. See [TESTING.md](TESTING.md) and [adversary/](adversary/) |
-| Does it work with our Claude Code policy? | It works with no hooks at all (`wait_for_message`, `/loop`), so `allowManagedHooksOnly` is fine. Under `managed-mcp.json`, project `.mcp.json` files are ignored. Admins add one fixed entry: `node /opt/agent-bridge/server.js` with settings in `env`, which the allowlist doesn't compare |
+| Does it work with our Claude Code policy? | It works with no hooks at all (`wait_for_message`, `/loop`), so `allowManagedHooksOnly` is fine. Under `managed-mcp.json`, project `.mcp.json` files are ignored. Admins add one fixed entry: `node /opt/agent-bridge/server.js` with settings in `env`, which the allowlist doesn't compare. With `AGENT_BRIDGE_NAME_FROM=project` each agent is named after its project folder, which must already be a valid agent name (capitals are lower-cased; anything else is refused, and so is an `AGENT_NAME` that differs from the folder) |
 | And with Codex or Cursor? | Codex: admins can allowlist the server in `requirements.toml` (`[mcp_servers.bridge.identity]`, matched on the launch command; anything else is disabled), and `allow_managed_hooks_only` turns project hooks off; the bridge works without hooks. Codex also loads a repo's `.codex/` only for a trusted project and runs a hook only after the user trusts it. Cursor: hooks and MCP can be set machine-wide (`/etc/cursor`, `/Library/Application Support/Cursor`, `C:\ProgramData\Cursor`). Details and what is verified: [clients/codex.md](clients/codex.md), [clients/cursor.md](clients/cursor.md) |
 | Is it diagnosable? | `node cli.js doctor [repo]` checks Node, backend, settings, token file permissions, proxy and CA, DLP, and reachability and auth, and prints a fix for every failure, with secrets masked |
 

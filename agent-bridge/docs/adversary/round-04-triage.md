@@ -43,4 +43,4 @@ The attacker found no way to execute code through the new writers: POSIX quoting
 editor survived 21 merge shapes, hook output is always JSON-encoded, and R3-04's fix held. What it found was about
 **trust boundaries around files a cloned repo controls** (what init keeps, what doctor opens, what a hook reads) and about
 being exact with users (wording, flags). Round 3's open items (DLP gaps and the rest, see
-[round-03-triage.md](round-03-triage.md)) are still open, except R3-07's service_role half, closed here.
+[round-03-triage.md](round-03-triage.md)) were fixed after this round (R3-07's service_role half here).

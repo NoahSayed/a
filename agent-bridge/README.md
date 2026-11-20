@@ -208,9 +208,10 @@ There's a non-root Docker image in [`relay/`](relay/). Details: [docs/ENTERPRISE
 - **Proxy and TLS inspection:** run `init` in a shell where `HTTPS_PROXY`, `NO_PROXY` and `NODE_EXTRA_CA_CERTS` (or
   `NODE_USE_SYSTEM_CA=1`) are set. It copies them into the server's settings with `NODE_USE_ENV_PROXY=1`, which Node's
   `fetch` needs before it will use a proxy. Plain `http://` backends are refused except on localhost.
-- **DLP:** outgoing messages are checked for private keys, cloud and SaaS tokens, JWTs, password assignments, payment
-  card numbers (Luhn plus issuer) and IBANs (mod-97). Set `AGENT_BRIDGE_DLP` to `block` (default), `redact`, `warn` or
-  `off`.
+- **DLP:** outgoing messages (subject and body, also checked together) are checked for private keys, cloud and SaaS
+  tokens, JWTs, passwords in assignments, command-line flags, connection URLs and `Authorization` headers, payment card
+  numbers (Luhn plus issuer) and IBANs (mod-97), after undoing zero-width and full-width tricks. Set
+  `AGENT_BRIDGE_DLP` to `block` (default), `redact`, `warn` or `off`. It is pattern-based: a safety net, not a guarantee.
 - **`node cli.js doctor [repo]`:** checks Node, backend, settings, token-file permissions, proxy and CA, DLP, and
   reachability and auth. Every problem comes with a fix, and secrets are masked.
 
