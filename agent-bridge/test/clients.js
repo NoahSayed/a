@@ -213,6 +213,29 @@ try {
     }
   });
 
+  // FileTx is the last layer for every writer (the writers check too); tested on its own so neither layer hides the other.
+  if (IS_WIN) skip("FileTx refuses a symlinked file or directory and writes nothing", "creating symlinks needs privileges on Windows");
+  else
+    await test("FileTx refuses a symlinked file or directory and writes nothing", async () => {
+      const { FileTx } = await import("../clients/common.js");
+      const outside = repo();
+      writeFileSync(join(outside, "victim.json"), "keep");
+      const r1 = repo();
+      symlinkSync(join(outside, "victim.json"), join(r1, "a.json"));
+      let tx = new FileTx();
+      tx.write(join(r1, "b.json"), "new");
+      tx.write(join(r1, "a.json"), "pwned");
+      assert.throws(() => tx.commit(), /symlink/);
+      assert.equal(readFileSync(join(outside, "victim.json"), "utf8"), "keep");
+      assert.ok(!existsSync(join(r1, "b.json")), "a file was written before the symlink was refused");
+      const r2 = repo();
+      symlinkSync(outside, join(r2, ".cursor"));
+      tx = new FileTx();
+      tx.write(join(r2, ".cursor", "mcp.json"), "pwned");
+      assert.throws(() => tx.commit(), /symlink/);
+      assert.ok(!existsSync(join(outside, "mcp.json")), "written through a symlinked directory");
+    });
+
   await test("peek --format with an unknown format prints nothing and exits 0 (never blocks a prompt)", async () => {
     const out = await runCli(["peek", "front", "--format", "nope"], env);
     assert.equal(out.code, 0);

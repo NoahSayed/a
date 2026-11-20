@@ -8,9 +8,9 @@ export default [
   // --- files: symlinks, merging, shape
   // Symlinks and a bad --cursor-events: the writer's own checks are second layers. FileTx.commit() refuses
   // a symlinked file or directory, and nothing is written until every tool's files are planned, so a
-  // late failure writes nothing (mutated as R4-01). These mutate the shared symlink layer instead.
-  { name: "CU FileTx writes through a symlinked file", file: "clients/common.js", find: `    for (const f of this.files) refuseSymlink(f.path);\n`, replace: ``, suite: CC },
-  { name: "CU FileTx writes through a symlinked directory", file: "clients/common.js", find: `      refuseSymlink(dirname(f.path));\n`, replace: ``, suite: CC },
+  // late failure writes nothing (mutated as R4-01). These mutate the shared symlink layer instead, tested on its own in test/clients.js.
+  { name: "CU FileTx writes through a symlinked file", file: "clients/common.js", find: `    for (const f of this.files) refuseSymlink(f.path);\n`, replace: ``, suite: ["test/clients.js"] },
+  { name: "CU FileTx writes through a symlinked directory", file: "clients/common.js", find: `      refuseSymlink(dirname(f.path));\n`, replace: ``, suite: ["test/clients.js"] },
   { name: "CU the user's other MCP servers are dropped", file: F, find: `  mcp.mcpServers ??= {};`, replace: `  mcp.mcpServers = {};`, suite: CC },
   { name: "CU hooks.json `version` not preserved", file: F, find: `  doc.version ??= 1;`, replace: `  doc.version = 1;`, suite: CC },
   { name: "CU the user's other hooks are dropped", file: F, find: `      list = [...(list ?? []), entry];`, replace: `      list = [entry];`, suite: CC },
